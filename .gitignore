@@ -1,0 +1,26 @@
+# Recordings & derived media
+jam_saves/
+*.wav
+*.mp3
+*.peaks.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Go build output
+v2-go/v2-go-bin
+v2-go/vendor/
+
+# Runtime state
+.use_green
+*.log
+
+# Test/automation artifacts
+.playwright-mcp/
+*.png.tmp
+/mobile-*.png
+
+# Local deploy target (host/user) — never committed
+deploy.local.env

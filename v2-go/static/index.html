@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Audio Dashcam</title>
+<meta name="description" content="Always-listening audio buffer. Grab the last 30 seconds of the jam.">
+
+<meta name="theme-color" content="#0b1120">
+<meta name="color-scheme" content="dark">
+
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+
+<!-- iOS standalone launch works over plain HTTP; Android needs TLS for a
+     full install, which this LAN device does not have. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dashcam">
+
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="/icons/icon-192.png" alt="">
+    <b>Audio Dashcam</b>
+  </div>
+  <div class="health">
+    <span class="dot" id="health-dot"></span>
+    <span id="health-text">connecting</span>
+  </div>
+</header>
+
+<main>
+
+  <section class="panel">
+    <div class="viz-wrap" id="viz-wrap">
+      <canvas id="viz"></canvas>
+    </div>
+
+    <div class="meters" id="meters"></div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="k">buffered</div>
+        <div class="v" id="stat-buffered">–</div>
+      </div>
+      <div class="stat">
+        <div class="k">disk free</div>
+        <div class="v" id="stat-disk">–</div>
+      </div>
+      <div class="stat">
+        <div class="k">dropped</div>
+        <div class="v" id="stat-xruns">0</div>
+      </div>
+    </div>
+
+    <details class="chan" id="chan-diag">
+      <summary>Input channels</summary>
+      <div class="grid" id="chan-grid"></div>
+      <p class="hint">
+        Saving channels <b id="chan-saving">–</b> from <b id="chan-device">–</b>.
+        Change with <code>SAVE_CHANNELS</code>.
+      </p>
+    </details>
+  </section>
+
+  <section class="panel">
+    <h2>Capture</h2>
+    <div class="seg" id="dur-seg" role="group" aria-label="Capture length"></div>
+    <button class="capture-btn" id="capture-btn">Capture</button>
+    <p class="last">last saved <span id="last-saved">none</span></p>
+  </section>
+
+  <section class="panel">
+    <h2>Takes</h2>
+    <div class="takes" id="takes"></div>
+    <p class="empty" id="takes-empty">No takes yet — hit Capture.</p>
+  </section>
+
+</main>
+
+<div id="toasts" aria-live="polite"></div>
+
+<dialog class="sheet" id="confirm">
+  <form method="dialog" class="sheet-inner">
+    <h3>Delete this take?</h3>
+    <p id="confirm-name"></p>
+    <div class="sheet-actions">
+      <button class="icon-btn" value="cancel">Cancel</button>
+      <button class="icon-btn confirm" value="delete">Delete</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
