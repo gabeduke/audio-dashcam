@@ -1,6 +1,7 @@
 # Audio Dashcam — session state
 
 **Last updated:** 2026-09-07 · **Branch:** master
+**Repo:** https://github.com/gabeduke/audio-dashcam (public)
 
 An always-listening audio buffer for a Raspberry Pi. It continuously captures
 the stereo master from a USB interface into a memory ring; pressing Capture in
@@ -11,8 +12,14 @@ the web UI writes the last N seconds to disk. Nothing touches disk until asked.
 ## TL;DR
 
 The Go rework is **finished, deployed and verified**, with one unverified
-assumption (below). The Python original has been removed — it lives in git
-history at `0219975` if ever needed.
+assumption (below). The Python original has been removed.
+
+Now published as a public repo. Pre-publication history was **squashed to a
+single initial commit** because earlier commits carried home network details
+(public IP, service domains) that scrubbing the working tree does not remove
+from history. The old commits survive only in this machine's reflog — the
+Python original and the draft k3s ingress are recoverable from there for now,
+but not from the remote.
 
 The next feature set — take triage, one-region trim, batch export — is
 **designed and specced**, not implemented. Spec:
@@ -79,7 +86,7 @@ Brainstormed and approved. Next action is `superpowers:writing-plans`.
 | Take lifecycle | **Staging** — the Pi is a holding pen; keepers get pulled to a DAW within days. Triage speed + export quality matter; search/archive do not. |
 | Friction | **Both** triage and egress, plus a new ask: **"chop up a sample"**. |
 | Chop scope | **Trim — one region per take.** Not multi-slice, not auto-detect. |
-| Device | **Phone, right after playing.** Touch-first at 390px. |
+| Device | **Phone, right after playing.** Touch-first at 390px. Tablet supported via breakpoints (>= 600px), not a separate design. |
 
 ### The design in one paragraph
 
@@ -177,6 +184,10 @@ that HTTPS is going via Tailscale.
 ### Build
 - [ ] `superpowers:writing-plans` on the spec, then implement **Phase 1**.
 - [ ] Phase 2 (trim), Phase 3 (egress).
+- [ ] Tablet breakpoints (>= 600px): cap and centre the content column, Takes
+      list two-up, trim editor waveforms side by side. Extra width helps drag
+      resolution but does not replace the detail view — a 30s take is 77ms/px at
+      390px and still 29ms/px at 1024px.
 
 ### Infrastructure
 - [ ] Set up `tailscale serve` on the Pi; confirm the PWA installs on Android.
