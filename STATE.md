@@ -77,7 +77,11 @@ single static binary instead of venv + `python3-pyaudio` + `portaudio19-dev`.
 ## Part 2 — Next feature set: DESIGNED, not implemented
 
 **Spec:** `docs/superpowers/specs/2026-09-07-take-triage-trim-design.md`.
-Brainstormed and approved. Next action is `superpowers:writing-plans`.
+**Phase 1 plan:** `docs/superpowers/plans/2026-09-07-take-identity-phase1.md`
+(8 TDD tasks, ready to execute). Phases 2 and 3 are specced but not yet planned.
+
+**Awaiting a decision:** execute the plan subagent-driven (a fresh subagent per
+task, review between) or inline in-session. Nothing is blocked otherwise.
 
 ### Requirements settled
 
@@ -182,12 +186,21 @@ that HTTPS is going via Tailscale.
 - [ ] Capture a real jam and confirm the preview sounds like the room.
 
 ### Build
-- [ ] `superpowers:writing-plans` on the spec, then implement **Phase 1**.
-- [ ] Phase 2 (trim), Phase 3 (egress).
-- [ ] Tablet breakpoints (>= 600px): cap and centre the content column, Takes
-      list two-up, trim editor waveforms side by side. Extra width helps drag
-      resolution but does not replace the detail view — a 30s take is 77ms/px at
-      390px and still 29ms/px at 1024px.
+- [ ] **Execute the Phase 1 plan** (sidecar, rename, star, starred-first).
+- [ ] `superpowers:writing-plans` for Phase 2 (trim), then Phase 3 (egress).
+- [ ] Tablet breakpoints (>= 600px), deferred to land with the Phase 2 trim
+      editor — the screen that actually benefits from the width. Cap and centre
+      the content column, Takes list two-up, waveforms side by side. Extra width
+      helps drag resolution but does not replace the detail view: a 30s take is
+      77ms/px at 390px and still 29ms/px at 1024px.
+
+### Known gotchas for whoever picks this up
+- `audio/capture.go` is cgo/PortAudio, so `go test ./audio/...` may not build on
+  a Mac. Run tests on the Pi: `ssh "$DASHCAM_HOST" 'cd ~/audio-dashcam/v2-go && go test ./...'`.
+- There are no JS tests and no harness; frontend changes are verified manually.
+- The spec says the sidecar's human name is `name`; the plan corrects it to
+  `label` because `Take.Name` is the filename and the row key in `takes.js`.
+  The plan's last step updates the spec.
 
 ### Infrastructure
 - [ ] Set up `tailscale serve` on the Pi; confirm the PWA installs on Android.
