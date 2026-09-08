@@ -3,10 +3,12 @@
 import { connectLive } from '/lib/live.js';
 import { Visualizer, Meters, FLOOR_DB } from '/lib/meter.js';
 import { TakesList } from '/lib/takes.js';
+import { initWakeLock } from '/lib/wakelock.js';
 
 const $ = (id) => document.getElementById(id);
 
 const el = {
+  awake: $('awake'),
   healthDot: $('health-dot'),
   healthText: $('health-text'),
   vizWrap: $('viz-wrap'),
@@ -266,6 +268,15 @@ document.addEventListener('visibilitychange', () => {
     pollStatus();
     pollTakes();
   }
+});
+
+// Keep the screen awake while docked on a charger. Charging-only, so a phone
+// on battery is untouched. Like the service worker below, this needs a secure
+// context, so it engages on the tailnet HTTPS name and not over plain HTTP.
+initWakeLock({
+  onChange: (held) => {
+    el.awake.hidden = !held;
+  },
 });
 
 // A service worker cannot register over plain HTTP, which is how this device

@@ -4,7 +4,9 @@
 // convenience for the app shell — the recordings and the live stream come from
 // the Pi itself, so there is nothing useful to serve when it is unreachable.
 
-const CACHE = 'dashcam-shell-v1';
+// Bump this whenever SHELL changes: addAll is atomic, so a stale install
+// listing a file that no longer exists would fail to precache entirely.
+const CACHE = 'dashcam-shell-v2';
 const SHELL = [
   '/',
   '/index.html',
@@ -13,6 +15,7 @@ const SHELL = [
   '/lib/live.js',
   '/lib/meter.js',
   '/lib/takes.js',
+  '/lib/wakelock.js',
   '/vendor/wavesurfer.esm.js',
   '/manifest.json',
   '/icons/icon-192.png',

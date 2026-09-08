@@ -32,6 +32,12 @@
     <b>Audio Dashcam</b>
   </div>
   <div class="health">
+    <!-- Shown only while a screen wake lock is actually held. Icon-only on
+         purpose: .health has caused a topbar overflow before, and a phone that
+         is charging will show this at 390px. -->
+    <span class="awake" id="awake" hidden
+          title="Screen kept awake while charging"
+          aria-label="Screen kept awake while charging" role="img">&#9788;</span>
     <span class="dot" id="health-dot"></span>
     <span id="health-text">connecting</span>
   </div>

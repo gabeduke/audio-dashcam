@@ -218,6 +218,16 @@ main {
 
 /* ---------- capture ---------- */
 
+/* Wake-lock indicator. flex-shrink:0 so it never gets squeezed into the
+   status text, and line-height:1 so it adds no height to the bar. */
+.awake {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
 .seg {
   display: grid;
   grid-auto-flow: column;
