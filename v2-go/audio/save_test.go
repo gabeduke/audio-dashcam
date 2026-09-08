@@ -110,3 +110,20 @@ func TestListTakesSortsStarredFirstThenNewest(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoveTakeDeletesSidecar(t *testing.T) {
+	dir := t.TempDir()
+	wav := writeFakeTake(t, dir, "jam_a.wav", time.Minute)
+	if err := WriteMeta(wav, Meta{Label: "x", Starred: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	RemoveTake(dir, "jam_a.wav")
+
+	if _, err := os.Stat(wav); !os.IsNotExist(err) {
+		t.Error("wav still present after RemoveTake")
+	}
+	if _, err := os.Stat(metaPath(wav)); !os.IsNotExist(err) {
+		t.Error("sidecar still present after RemoveTake — a new take reusing the name would inherit it")
+	}
+}

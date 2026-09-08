@@ -244,6 +244,7 @@ func RemoveTake(dir, name string) {
 	os.Remove(base)
 	os.Remove(previewPath(base))
 	os.Remove(peaksPath(base))
+	os.Remove(metaPath(base))
 }
 
 func previewPath(wav string) string { return strings.TrimSuffix(wav, ".wav") + "_preview.mp3" }
