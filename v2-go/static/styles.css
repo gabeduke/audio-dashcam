@@ -274,13 +274,63 @@ main {
 }
 
 .take-head {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 10px; margin-bottom: 9px;
+  /* align-items: center, not baseline: the star and the name are now controls
+     of different heights, and the input swaps in for the name in place. */
+  display: flex; align-items: center;
+  gap: 8px; margin-bottom: 9px;
 }
+
+.star {
+  flex: none;
+  width: var(--tap);
+  height: var(--tap);
+  margin: -12px 0 -12px -12px;   /* full tap target without bloating the row */
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: color .15s ease, transform .15s ease;
+}
+
+.star:hover  { color: var(--ink-dim); }
+.star.on     { color: var(--warn); }
+.star:active { transform: scale(.88); }
+.star:disabled { opacity: .5; cursor: default; }
+
 .take-name {
-  font-family: var(--mono); font-size: 12.5px; color: var(--ink);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
 }
+
+/* No label yet, so the row falls back to the timestamp — kept monospace and
+   dimmed so a real name reads as the exception it is. */
+.take-name.unlabelled { color: var(--ink-dim); font-family: var(--mono); font-size: 13px; }
+
+.take-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--ink);
+}
+
+.take-name-input:focus { outline: none; }
 .take-meta {
   font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
   white-space: nowrap; flex: none;
