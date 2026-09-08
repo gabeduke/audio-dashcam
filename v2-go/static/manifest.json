@@ -1,4 +1,5 @@
 {
+  "id": "/",
   "name": "Audio Dashcam",
   "short_name": "Dashcam",
   "description": "Always-listening audio buffer for catching the jam you just played.",

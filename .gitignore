@@ -24,3 +24,6 @@ v2-go/vendor/
 
 # Local deploy target (host/user) — never committed
 deploy.local.env
+
+# Session working notes — local only (carries home network details)
+STATE.md

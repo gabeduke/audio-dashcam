@@ -13,8 +13,10 @@
 <link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 
-<!-- iOS standalone launch works over plain HTTP; Android needs TLS for a
-     full install, which this LAN device does not have. -->
+<!-- Android needs TLS for a full install. That comes from `tailscale serve`
+     on the tailnet hostname; the plain-HTTP LAN address still works but will
+     not install, and app.js will not register the service worker there
+     because isSecureContext is false. -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
