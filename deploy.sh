@@ -9,6 +9,17 @@ set -euo pipefail
 HOST="${DASHCAM_HOST:?set DASHCAM_HOST (e.g. pi@dashcam.local), or put it in deploy.local.env}"
 DEST="${DASHCAM_DEST:-audio-dashcam}"
 
+# Static-only fast path. main.go serves the UI with
+# http.FileServer(http.Dir(staticDir())), so HTML/CSS/JS changes are picked up
+# from disk on the next request -- no rebuild, no restart. That turns the
+# layout iteration loop from about a minute into about a second.
+if [ "${1:-}" = "--static" ]; then
+  echo "[*] syncing v2-go/static only to $HOST:~/$DEST"
+  rsync -az --delete ./v2-go/static/ "$HOST:~/$DEST/v2-go/static/"
+  echo "[*] done (no rebuild, no restart)"
+  exit 0
+fi
+
 echo "[*] syncing to $HOST:~/$DEST"
 rsync -az --delete \
   --exclude 'jam_saves' \
