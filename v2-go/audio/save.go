@@ -186,9 +186,9 @@ type Take struct {
 	Trim    *Trim  `json:"trim,omitempty"`
 }
 
-// ListTakes returns takes newest first. Duration and layout come from each
-// file's own header, so takes recorded under an older channel configuration
-// still report correctly.
+// ListTakes returns starred takes first, then the rest newest first. Duration
+// and layout come from each file's own header, so takes recorded under an
+// older channel configuration still report correctly.
 func ListTakes(dir string) ([]Take, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
