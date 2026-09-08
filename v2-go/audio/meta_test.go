@@ -78,6 +78,25 @@ func TestWriteMetaLeavesNoTempFiles(t *testing.T) {
 	}
 }
 
+func TestWriteMetaSidecarModeIs0644(t *testing.T) {
+	wav := filepath.Join(t.TempDir(), "jam_x.wav")
+
+	if err := WriteMeta(wav, Meta{Label: "a"}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+
+	fi, err := os.Stat(metaPath(wav))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// os.Chmod sets the mode explicitly rather than going through the umask,
+	// so 0644 is exact here — this assertion is not flaky under a stricter
+	// umask the way relying on CreateTemp's default mode would be.
+	if got := fi.Mode().Perm(); got != 0o644 {
+		t.Errorf("sidecar mode = %v, want 0644 to match the sibling .peaks.json and _preview.mp3", got)
+	}
+}
+
 func TestMetaPathReplacesExtension(t *testing.T) {
 	if got := metaPath("/a/b/jam_2026.wav"); got != "/a/b/jam_2026.meta.json" {
 		t.Errorf("metaPath = %q, want %q", got, "/a/b/jam_2026.meta.json")
