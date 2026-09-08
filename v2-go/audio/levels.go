@@ -41,6 +41,9 @@ type Levels struct {
 	pending  []Bin
 	peakHold []float32
 	clip     []bool
+	// lastRMS holds the newest bin's per-channel dBFS independently of
+	// pending, so a Drain does not blank /api/status.
+	lastRMS []float32
 
 	subsMu sync.Mutex
 	subs   map[chan Frame]struct{}
@@ -60,11 +63,17 @@ func NewLevels(channels, sampleRate, binMillis int) *Levels {
 		curSumSq:   make([]float64, channels),
 		peakHold:   make([]float32, channels),
 		clip:       make([]bool, channels),
+		lastRMS:    make([]float32, channels),
 		subs:       map[chan Frame]struct{}{},
 	}
 	l.resetBin()
 	for i := range l.peakHold {
 		l.peakHold[i] = FloorDB
+	}
+	// Zero is full scale, so an unseeded lastRMS would peg the meters at 0 dBFS
+	// until the first bin flushes.
+	for i := range l.lastRMS {
+		l.lastRMS[i] = FloorDB
 	}
 	return l
 }
@@ -130,6 +139,7 @@ func (l *Levels) flushBinLocked() {
 			l.peakHold[c] = b.RMS[c]
 		}
 	}
+	copy(l.lastRMS, b.RMS)
 	l.pending = append(l.pending, b)
 	// Bound the backlog if nobody is draining (no clients connected).
 	if len(l.pending) > 512 {
@@ -166,16 +176,15 @@ func (l *Levels) Drain() Frame {
 
 // Snapshot reports the current per-channel RMS in dBFS without consuming bins.
 // Used by /api/status and for the channel-routing diagnostic.
+//
+// It reads lastRMS rather than pending because Broadcast drains pending every
+// 40ms whenever a websocket client is connected, which used to leave a status
+// poll landing in that gap reporting silence on every channel.
 func (l *Levels) Snapshot() []float32 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := make([]float32, l.channels)
-	for c := range out {
-		out[c] = FloorDB
-	}
-	if len(l.pending) > 0 {
-		copy(out, l.pending[len(l.pending)-1].RMS)
-	}
+	copy(out, l.lastRMS)
 	return out
 }
 

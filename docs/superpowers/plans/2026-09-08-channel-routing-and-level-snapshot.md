@@ -97,7 +97,7 @@ is exactly when someone is looking at it.
 snaps back. This is the strongest candidate for "not picking up the leveled
 values".
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `v2-go/audio/levels_test.go`:
 
@@ -171,7 +171,7 @@ func TestSnapshotTracksTheMostRecentBin(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm the first one actually fails**
+- [x] **Step 2: Run the tests and confirm the first one actually fails** — it did: `Snapshot fell to the floor after Drain: [-60 -60]`
 
 Run:
 ```bash
@@ -187,7 +187,7 @@ code is worse than no test; this project has already shipped one such test and
 caught it only by reverting the fix. If `TestSnapshotSurvivesDrain` passes here,
 stop and work out why before changing anything.
 
-- [ ] **Step 3: Add the field**
+- [x] **Step 3: Add the field**
 
 In `v2-go/audio/levels.go`, add `lastRMS` to the `Levels` struct, after `clip`:
 
@@ -204,7 +204,7 @@ In `v2-go/audio/levels.go`, add `lastRMS` to the `Levels` struct, after `clip`:
 	                   // pending so a drain does not blank /api/status
 ```
 
-- [ ] **Step 4: Seed it in NewLevels**
+- [x] **Step 4: Seed it in NewLevels**
 
 Add `lastRMS` to the struct literal in `NewLevels`:
 
@@ -231,7 +231,7 @@ Add `lastRMS` to the struct literal in `NewLevels`:
 	return l
 ```
 
-- [ ] **Step 5: Write it on every flush**
+- [x] **Step 5: Write it on every flush**
 
 In `flushBinLocked`, immediately after the `for c := 0; c < l.channels; c++`
 loop that fills `b` and before `l.pending = append(l.pending, b)`:
@@ -241,7 +241,7 @@ loop that fills `b` and before `l.pending = append(l.pending, b)`:
 	l.pending = append(l.pending, b)
 ```
 
-- [ ] **Step 6: Read it in Snapshot**
+- [x] **Step 6: Read it in Snapshot**
 
 Replace the whole body of `Snapshot`:
 
@@ -261,7 +261,7 @@ func (l *Levels) Snapshot() []float32 {
 }
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass** — 3 new tests green, full suite green, `go vet` and `-race` clean. Deployed. **Not yet confirmed on hardware**: the source was silent by the time the fix was live, and an all-floor reading is indistinguishable from real silence, so the confirming poll still has to be run with audio playing and the UI open.
 
 Run:
 ```bash
