@@ -57,13 +57,20 @@ body {
 
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .brand img { width: 24px; height: 24px; border-radius: 6px; flex: none; }
-.brand b { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.brand b {
+  font-size: 15px; font-weight: 650; letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .health {
   display: flex; align-items: center; gap: 7px;
   font-family: var(--mono); font-size: 12px; color: var(--ink-dim);
   white-space: nowrap;
+  min-width: 0;          /* without this the flex default is auto, and a long
+                            status refuses to shrink and overlaps the brand */
+  flex: 0 1 auto;
 }
+#health-text { overflow: hidden; text-overflow: ellipsis; }
 .dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--ink-faint); flex: none;

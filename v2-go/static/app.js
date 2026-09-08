@@ -66,6 +66,9 @@ let viz = null;
 let mainMeters = null;
 let chanMeters = null;
 let selSeconds = 30;
+// Last capture error already surfaced, so a 2-second poll does not re-toast the
+// same failure forever. Cleared on recovery, so a repeat failure toasts again.
+let lastCaptureError = '';
 
 const takes = new TakesList(el.takes, el.takesEmpty, {
   onToast: toast,
@@ -143,7 +146,17 @@ function applyStatus(s) {
 
   const healthy = s.capture_healthy;
   el.healthDot.className = `dot ${healthy ? 'ok' : 'bad'}`;
-  el.healthText.textContent = healthy ? 'recording' : s.last_error || 'no capture';
+
+  // The bar is narrow and device errors are long ("Illegal combination of I/O
+  // devices" and friends), so it carries a short status only. The full text
+  // goes to a toast, which has the width for it, and to the title for a hover.
+  const detail = healthy ? '' : (s.last_error || '');
+  el.healthText.textContent = healthy ? 'recording' : (detail ? 'capture error' : 'no capture');
+  el.healthText.title = detail;
+
+  if (detail && detail !== lastCaptureError) toast(detail, 'bad', 8000);
+  lastCaptureError = detail;
+
   el.vizWrap.classList.toggle('stale', !healthy);
 
   el.statBuffered.textContent = fmtDur(Math.round(s.buffered_seconds));
