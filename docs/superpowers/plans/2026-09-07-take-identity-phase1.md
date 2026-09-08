@@ -97,7 +97,7 @@ func TestWriteThenReadMetaRoundTrips(t *testing.T) {
 
 func TestReadMetaCorruptFileReturnsDefaultsAndKeepsFile(t *testing.T) {
 	wav := filepath.Join(t.TempDir(), "jam_x.wav")
-	p := MetaPath(wav)
+	p := metaPath(wav)
 	if err := os.WriteFile(p, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +134,8 @@ func TestWriteMetaLeavesNoTempFiles(t *testing.T) {
 }
 
 func TestMetaPathReplacesExtension(t *testing.T) {
-	if got := MetaPath("/a/b/jam_2026.wav"); got != "/a/b/jam_2026.meta.json" {
-		t.Errorf("MetaPath = %q, want %q", got, "/a/b/jam_2026.meta.json")
+	if got := metaPath("/a/b/jam_2026.wav"); got != "/a/b/jam_2026.meta.json" {
+		t.Errorf("metaPath = %q, want %q", got, "/a/b/jam_2026.meta.json")
 	}
 }
 ```
@@ -143,7 +143,7 @@ func TestMetaPathReplacesExtension(t *testing.T) {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `go test ./audio/ -run 'Meta' -v`
-Expected: FAIL — `undefined: ReadMeta`, `undefined: MetaVersion`, `undefined: Meta`, `undefined: Trim`, `undefined: WriteMeta`, `undefined: MetaPath`.
+Expected: FAIL — `undefined: ReadMeta`, `undefined: MetaVersion`, `undefined: Meta`, `undefined: Trim`, `undefined: WriteMeta`, `undefined: metaPath`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -184,8 +184,9 @@ type Meta struct {
 	Trim    *Trim  `json:"trim,omitempty"`
 }
 
-// MetaPath returns the sidecar path for a take's wav path.
-func MetaPath(wav string) string { return strings.TrimSuffix(wav, ".wav") + ".meta.json" }
+// metaPath returns the sidecar path for a take's wav path. Unexported to match
+// its siblings previewPath and peaksPath in save.go, which do the identical job.
+func metaPath(wav string) string { return strings.TrimSuffix(wav, ".wav") + ".meta.json" }
 
 // ReadMeta loads a take's sidecar. A missing or unparseable sidecar yields
 // defaults rather than an error, and the file is left alone: metadata is
@@ -193,7 +194,7 @@ func MetaPath(wav string) string { return strings.TrimSuffix(wav, ".wav") + ".me
 func ReadMeta(wav string) Meta {
 	def := Meta{Version: MetaVersion}
 
-	b, err := os.ReadFile(MetaPath(wav))
+	b, err := os.ReadFile(metaPath(wav))
 	if err != nil {
 		return def
 	}
@@ -201,7 +202,12 @@ func ReadMeta(wav string) Meta {
 	if err := json.Unmarshal(b, &got); err != nil {
 		return def
 	}
-	got.Version = MetaVersion
+	// Normalize only the zero case, so a sidecar written before the version
+	// field existed gets stamped while a NEWER one survives as a signal. Forcing
+	// MetaVersion here would defeat the whole point of versioning the format.
+	if got.Version == 0 {
+		got.Version = MetaVersion
+	}
 	return got
 }
 
@@ -209,6 +215,12 @@ func ReadMeta(wav string) Meta {
 // every five seconds, so a half-written file would be read eventually; a temp
 // file plus rename makes that impossible.
 func WriteMeta(wav string, m Meta) error {
+	// Refuse to rewrite a sidecar written by a newer build: this code cannot
+	// represent fields it does not know about, and silently dropping them
+	// would be worse than failing.
+	if m.Version > MetaVersion {
+		return fmt.Errorf("sidecar is version %d, this build writes %d", m.Version, MetaVersion)
+	}
 	m.Version = MetaVersion
 
 	b, err := json.MarshalIndent(m, "", "  ")
@@ -216,7 +228,7 @@ func WriteMeta(wav string, m Meta) error {
 		return err
 	}
 
-	p := MetaPath(wav)
+	p := metaPath(wav)
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".meta-*.tmp")
 	if err != nil {
 		return err
@@ -518,7 +530,7 @@ func TestRemoveTakeDeletesSidecar(t *testing.T) {
 	if _, err := os.Stat(wav); !os.IsNotExist(err) {
 		t.Error("wav still present after RemoveTake")
 	}
-	if _, err := os.Stat(MetaPath(wav)); !os.IsNotExist(err) {
+	if _, err := os.Stat(metaPath(wav)); !os.IsNotExist(err) {
 		t.Error("sidecar still present after RemoveTake — a new take reusing the name would inherit it")
 	}
 }
@@ -540,7 +552,7 @@ func RemoveTake(dir, name string) {
 	os.Remove(base)
 	os.Remove(previewPath(base))
 	os.Remove(peaksPath(base))
-	os.Remove(MetaPath(base))
+	os.Remove(metaPath(base))
 }
 ```
 
@@ -565,6 +577,14 @@ Otherwise a later take reusing the timestamp would inherit a stale label."
 **Files:**
 - Modify: `v2-go/api/api.go` (`SetupRoutes`, plus a new handler)
 - Test: `v2-go/api/api_test.go`
+
+**Known hazard, accepted deliberately.** This handler is a read-modify-write:
+`ReadMeta`, mutate, `WriteMeta`. Two browser tabs acting at once — one starring
+while the other renames — lose one of the two changes. `WriteMeta` itself is
+safe (unique temp name, atomic rename, last write wins); the race is at this
+layer. Accepted because this is a single-user device on a LAN, and the cost of
+a lost star is one more tap. If it ever bites, the fix is a package-level mutex
+around the read-modify-write in this handler, not a change to `meta.go`.
 
 - [ ] **Step 1: Write the failing tests**
 

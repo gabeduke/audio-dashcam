@@ -1,6 +1,6 @@
 # Audio Dashcam — session state
 
-**Last updated:** 2026-09-07 · **Branch:** master
+**Last updated:** 2026-09-07 · **Branch:** `feat/take-identity` (off master)
 **Repo:** https://github.com/gabeduke/audio-dashcam (public)
 
 An always-listening audio buffer for a Raspberry Pi. It continuously captures
@@ -80,8 +80,46 @@ single static binary instead of venv + `python3-pyaudio` + `portaudio19-dev`.
 **Phase 1 plan:** `docs/superpowers/plans/2026-09-07-take-identity-phase1.md`
 (8 TDD tasks, ready to execute). Phases 2 and 3 are specced but not yet planned.
 
-**Awaiting a decision:** execute the plan subagent-driven (a fresh subagent per
-task, review between) or inline in-session. Nothing is blocked otherwise.
+**Executing now**, subagent-driven: a fresh implementer per task, then a spec
+compliance review and a code quality review before the next task starts.
+
+Work is on branch **`feat/take-identity`**, not master.
+
+| Task | Status |
+|---|---|
+| 1. Sidecar type + atomic IO | implemented `c355b65`; spec review passed; quality review returned CHANGES REQUESTED; fixes in progress |
+| 2. Merge sidecar into ListTakes | queued |
+| 3. Starred-first ordering | queued |
+| 4. RemoveTake cleans the sidecar | queued |
+| 5. PATCH /api/take | queued |
+| 6. Star toggle (JS) | queued |
+| 7. Inline rename (JS) | queued |
+| 8. Styling + manual verification | queued |
+
+### Review findings on Task 1 — both were flaws in the plan, not the code
+
+1. **Version normalization defeated the version field.** `ReadMeta` did
+   `got.Version = MetaVersion` unconditionally, so a future v2 sidecar would be
+   silently downgraded and any fields v1 does not know would be dropped on the
+   read-modify-write the PATCH handler performs. Fix: normalize only the zero
+   case, and have `WriteMeta` refuse to rewrite a sidecar newer than it can
+   represent. The plan has been corrected to match.
+2. **`MetaPath` was exported for no caller.** Unexported to `metaPath`, matching
+   its siblings `previewPath`/`peaksPath` in `save.go`. Plan call sites updated.
+
+Also applied: sidecar file mode `0644` to match the other sidecars (`os.CreateTemp`
+lands at `0600`), tests for the version cases and the update-in-place path, and a
+doc comment saying why `ReadMeta` is deliberately silent (`ListTakes` calls it
+per-take on a 5-second poll, so logging would be thousands of lines a day).
+
+### Carried forward into Task 5
+
+`PATCH /api/take` is a read-modify-write, so two browser tabs — one starring
+while the other renames — lose one change. `WriteMeta` itself is safe (unique
+temp name, atomic rename, last write wins); the race is at the handler. Recorded
+in the plan as **deliberately accepted**: single-user device on a LAN, and the
+cost is one more tap. The fix, if it ever matters, is a package-level mutex
+around the handler's read-modify-write, not a change to `meta.go`.
 
 ### Requirements settled
 
@@ -195,8 +233,14 @@ that HTTPS is going via Tailscale.
       77ms/px at 390px and still 29ms/px at 1024px.
 
 ### Known gotchas for whoever picks this up
-- `audio/capture.go` is cgo/PortAudio, so `go test ./audio/...` may not build on
-  a Mac. Run tests on the Pi: `ssh "$DASHCAM_HOST" 'cd ~/audio-dashcam/v2-go && go test ./...'`.
+- `audio/capture.go` is cgo/PortAudio. **Resolved on this Mac** with
+  `brew install portaudio`, so `go build ./...` and `go test ./...` now work
+  locally and the TDD loop does not need the Pi. On a machine without it, run
+  tests on the Pi instead:
+  `ssh "$DASHCAM_HOST" 'cd ~/audio-dashcam/v2-go && go test ./...'`.
+- The repo had **no Go tests at all** before this phase; Task 1 writes the first.
+  A green `go test ./...` that reports `[no test files]` is the old baseline, not
+  a passing suite.
 - There are no JS tests and no harness; frontend changes are verified manually.
 - The spec says the sidecar's human name is `name`; the plan corrects it to
   `label` because `Take.Name` is the filename and the row key in `takes.js`.
