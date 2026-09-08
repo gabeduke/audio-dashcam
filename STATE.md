@@ -1,6 +1,6 @@
 # Audio Dashcam — session state
 
-**Last updated:** 2026-09-07 · **Branch:** `feat/take-identity` (off master)
+**Last updated:** 2026-09-08 · **Branch:** `master` (phase 1 merged)
 **Repo:** https://github.com/gabeduke/audio-dashcam (public)
 
 An always-listening audio buffer for a Raspberry Pi. It continuously captures
@@ -21,8 +21,10 @@ from history. The old commits survive only in this machine's reflog — the
 Python original and the draft k3s ingress are recoverable from there for now,
 but not from the remote.
 
-The next feature set — take triage, one-region trim, batch export — is
-**designed and specced**, not implemented. Spec:
+Take triage — **phase 1 of** the triage/trim/export feature set — is now
+**shipped and running on the Pi**: per-take sidecar, star toggle, inline
+rename, starred-first ordering. Phases 2 (trim) and 3 (egress) are specced but
+not planned. Spec:
 `docs/superpowers/specs/2026-09-07-take-triage-trim-design.md`.
 
 HTTPS will come from **Tailscale**, not the k3s cluster. That decision is new
@@ -95,7 +97,7 @@ Work is on branch **`feat/take-identity`**, not master.
 | 6. Star toggle (JS) | **DONE** — `dd7d6e2` |
 | 7. Inline rename (JS) | **DONE** — `23ed502` |
 | 8. Styling | **DONE** — `8d99246`; spec field name `5de2274` |
-| 8b. Deploy + manual verification | **NOT DONE — needs the Pi and a phone** |
+| 8b. Deploy + verification | **DONE** — deployed, verified against the running Pi |
 
 ### Also shipped this session, separate from phase 1
 
@@ -111,7 +113,8 @@ per distinct error, since status polls every 2s) and in the title. CSS fixed
 independently so it stays safe if a long string ever returns. Verified at 390px
 by forcing the original error back in: no intersection, no horizontal scroll.
 
-**Run `./deploy.sh` to put it on the Pi** — it restarts the capture service.
+**Deployed.** This shipped along with phase 1; the bar now reads "recording"
+with the interface connected and `last_error` empty.
 
 ### Seven defects found so far — all in the plan, none in the implementations
 
@@ -200,6 +203,32 @@ Two verdicts to carry forward:
 No auth or rate limiting on this endpoint — but `handleDelete` can already destroy
 takes, so this does not change the threat model. Auth belongs with the Tailscale
 work, not here.
+
+### Phase 1 verified on the running Pi
+
+Deployed from `master` at `9b37c06`. Service active, `capture_healthy: true`,
+`last_error: ""`, ring 120s, 8ch @ 48k. `go test ./...` green on the Pi.
+
+Checked against the real backend (Playwright at 390px, not the stub):
+
+- The one pre-existing take — recorded before any of this — lists with
+  `label: ""`, `starred: false` and **no sidecar on disk**. Zero migration, as
+  designed.
+- Starring it created `jam_<ts>.meta.json` at mode **0644** holding
+  `{"version":1,"starred":true}`. That is the Task 1 chmod fix confirmed in
+  production, and `omitempty` correctly leaving `label` out.
+- Renaming wrote `"label":"Kitchen soundcheck"`; it survived a reload.
+- Clearing both returned `{"label":"","starred":false,"trim":null}` — the
+  Task 5 defect-5 fix (explicit response struct) working on real hardware,
+  since `omitempty` would have dropped exactly those two fields.
+- The take was restored to its original unlabelled, unstarred state.
+
+**Still unverified on hardware:** that deleting a take removes its sidecar.
+Not exercised because the only take on the device is real and deleting it to
+prove a point is a bad trade; it has unit coverage from Task 4 (`0255de7`).
+
+Note the owner was clicking in the UI at the same time as this pass — the
+accepted read-modify-write race, in the wild, converging harmlessly.
 
 ### Where the code stands
 
@@ -358,11 +387,12 @@ that HTTPS is going via Tailscale.
 - [x] **Execute the Phase 1 plan** (sidecar, rename, star, starred-first) — all
       8 tasks committed on `feat/take-identity`. **Not yet deployed or verified
       on hardware**; see the deploy item below.
-- [ ] **Deploy phase 1 and run Task 8's manual checks** (`./deploy.sh`, then the
-      checklist in the plan). This is the only thing standing between the branch
-      and merging. It also carries the topbar overflow fix, which has been
-      sitting on `master` undeployed.
-- [ ] Merge `feat/take-identity` once that passes.
+- [x] **Deploy phase 1 and verify on the Pi** — done; see "Phase 1 verified on
+      the running Pi" above. Carried the topbar overflow fix out with it.
+- [x] Merge `feat/take-identity` to `master` and push — `9b37c06`.
+- [ ] Confirm on an actual phone. The 390px pass was a desktop browser at phone
+      width, which proves layout and behaviour but not tap feel or Android PWA
+      install.
 - [ ] `superpowers:writing-plans` for Phase 2 (trim), then Phase 3 (egress).
 - [ ] Tablet breakpoints (>= 600px), deferred to land with the Phase 2 trim
       editor — the screen that actually benefits from the width. Cap and centre
