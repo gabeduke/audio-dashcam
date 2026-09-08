@@ -30,6 +30,7 @@ export class TakesList {
     this.etag = null;
     this.playing = null; // name of the currently playing take
     this.fresh = null;
+    this.reorderDeferred = false; // a render held back a move; see render()
 
     this.io = new IntersectionObserver(
       (entries) => {
@@ -91,6 +92,7 @@ export class TakesList {
 
   render(takes) {
     const seen = new Set();
+    this.reorderDeferred = false;
 
     takes.forEach((t, i) => {
       seen.add(t.name);
@@ -102,8 +104,15 @@ export class TakesList {
       this.updateRow(row, t);
 
       // Keep DOM order matching server order without touching other nodes.
+      // A row being renamed is left where it is. Moving a node blurs any
+      // focused input inside it, and the blur handler commits — so a poll
+      // that reordered the list would silently save half a name the user
+      // never confirmed. The move is deferred to endEdit instead.
       const at = this.container.children[i];
-      if (at !== row.el) this.container.insertBefore(row.el, at ?? null);
+      if (at !== row.el) {
+        if (row.editing) this.reorderDeferred = true;
+        else this.container.insertBefore(row.el, at ?? null);
+      }
     });
 
     for (const [name, row] of this.rows) {
@@ -167,6 +176,55 @@ export class TakesList {
       }
     });
 
+    const beginEdit = () => {
+      row.editing = true;
+      row.nameInput.value = row.data.label || '';
+      row.nameInput.placeholder = row.data.name.replace(/^jam_|\.wav$/g, '');
+      row.nameEl.hidden = true;
+      row.nameInput.hidden = false;
+      row.nameInput.focus();
+      row.nameInput.select();
+    };
+
+    const endEdit = async (commit) => {
+      if (!row.editing) return;
+      row.editing = false;
+      row.nameInput.hidden = true;
+      row.nameEl.hidden = false;
+
+      const label = commit ? row.nameInput.value.trim() : null;
+      if (commit && label !== (row.data.label || '')) {
+        try {
+          // patchTake re-fetches, which also flushes any deferred reorder.
+          await this.patchTake(row.name, { label });
+          return;
+        } catch (err) {
+          this.onToast?.(`Could not rename: ${err.message}`, 'bad');
+        }
+      }
+
+      // Nothing was written, so nothing has re-rendered: put the list back in
+      // server order if this edit held a move back.
+      if (this.reorderDeferred) {
+        this.etag = null;
+        try {
+          await this.refresh();
+        } catch { /* next poll picks it up */ }
+      }
+    };
+
+    row.nameEl.addEventListener('click', beginEdit);
+    row.nameInput.addEventListener('blur', () => endEdit(true));
+    row.nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        row.nameInput.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        endEdit(false);
+      }
+    });
+
     if (this.fresh === t.name) {
       el.classList.add('fresh');
       this.fresh = null;
@@ -181,7 +239,14 @@ export class TakesList {
     row.data = t;
     row.starBtn.setAttribute('aria-pressed', t.starred ? 'true' : 'false');
     row.starBtn.classList.toggle('on', !!t.starred);
-    row.nameEl.textContent = t.name.replace(/^jam_|\.wav$/g, '');
+    // A take with no label still needs something to show, and the timestamp is
+    // the only thing it has. Skip while the user is mid-edit so a poll cannot
+    // overwrite what they are typing.
+    if (!row.editing) {
+      const stamp = t.name.replace(/^jam_|\.wav$/g, '');
+      row.nameEl.textContent = t.label || stamp;
+      row.nameEl.classList.toggle('unlabelled', !t.label);
+    }
     row.metaEl.textContent = `${fmtTime(t.duration_seconds)} · ${fmtSize(t.size_mb)}`;
     row.dlEl.href = `/api/download?file=${encodeURIComponent(t.name)}&dl=1`;
 
