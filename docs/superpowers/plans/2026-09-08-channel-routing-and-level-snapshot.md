@@ -60,9 +60,9 @@ flattened to paths, so there is nothing more to extract from the asset.
 | # | Hypothesis | Status |
 |---|---|---|
 | H1 | `SAVE_CHANNELS=3,4` points at silence | **Refuted** — the WAVs above are healthy |
-| H2 | USB 3/4 is a single mixer channel, not the main mix, so the take misses everything else in the mix | **Open** — Task 3 decides |
-| H3 | USB 3/4 *is* MAIN and the report was about the meter display, not the recording | **Open** — Task 3 decides |
-| H4 | The Input-channels meters drop out intermittently | **Confirmed by inspection** — Task 1 fixes it |
+| H2 | USB 3/4 is a single mixer channel, not the main mix, so the take misses everything else in the mix | **CONFIRMED** 2026-09-08 — USB 3/4 is the CH1 *pre-fader* tap; MAIN is USB 1/2. See "Result" below |
+| H3 | USB 3/4 *is* MAIN and the report was about the meter display, not the recording | **Refuted** — but the meter half was independently real; see H4 |
+| H4 | The Input-channels meters drop out intermittently | **Confirmed on hardware** 2026-09-08 — 10 of 12 consecutive `/api/status` polls read −60 with real audio flowing. Task 1 fixes it |
 | H5 | The WebSocket level stream is broken by nginx | **Refuted** — `map $http_upgrade $connection_upgrade` is defined in `/etc/nginx/conf.d/websocket-upgrade.conf` and `nginx -t` passes |
 
 ---
@@ -308,7 +308,7 @@ because a status poll only ever reports the newest 10ms bin and quiet moments
 in real material would otherwise read as a dead channel.
 
 Usage:
-    python3 scripts/channel-probe.py ${DASHCAM_HOST#*@} --seconds 20
+    python3 scripts/channel-probe.py "$DASHCAM_ADDR" --seconds 20
 """
 
 import argparse
@@ -410,7 +410,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Make it executable and check it runs**
+- [x] **Step 2: Make it executable and check it runs**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam
@@ -453,7 +453,7 @@ moves it to CH2's pair — but it is still in MAIN. **So the pair that is active
 in both runs is MAIN**, and the pair that changes identifies CH1 versus CH2.
 The pair silent in both runs is AUX.
 
-- [ ] **Step 1: Power the EP-136 on and confirm the dashcam sees it**
+- [x] **Step 1: Power the EP-136 on and confirm the dashcam sees it**
 
 ```bash
 curl -s http://${DASHCAM_HOST#*@}/api/status | python3 -m json.tool | grep -E 'capture_healthy|device'
@@ -467,31 +467,61 @@ deployed yet — restart the service by hand and carry on:
 ssh "$DASHCAM_HOST" 'systemctl --user restart audio-dashcam.service'
 ```
 
-- [ ] **Step 2: Run A — source in mixer input CH1 only**
+- [x] **Step 2: Run A — source in mixer input CH1 only** (run as fader-up)
 
 Plug the sound source into the EP-136's **channel 1** input. Nothing in
 channel 2 or aux. Start playing something continuous and reasonably loud.
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam
-python3 scripts/channel-probe.py ${DASHCAM_HOST#*@} --seconds 20
+python3 scripts/channel-probe.py "$DASHCAM_ADDR" --seconds 20
 ```
 
 Record the "pairs" block verbatim. Expect exactly two active pairs.
 
-- [ ] **Step 3: Run B — same source in mixer input CH2 only**
+- [x] **Step 3: Run B — same source in mixer input CH2 only** (run as fader-down instead; see Step 4)
 
 Move the cable to the EP-136's **channel 2** input. Same material, same level.
 
 ```bash
-python3 scripts/channel-probe.py ${DASHCAM_HOST#*@} --seconds 20
+python3 scripts/channel-probe.py "$DASHCAM_ADDR" --seconds 20
 ```
 
 Record the pairs block again.
 
-- [ ] **Step 4: Derive the map**
+- [x] **Step 4: Derive the map**
 
 Fill this in from the two runs:
+
+**Measured 2026-09-08.** The fader variant below was used instead of re-cabling,
+because the owner's report ("vol sliders had no effect") pointed straight at a
+pre/post-fader distinction. Run A = source in mixer CH1, fader up. Run B = same
+cable and material, CH1 fader pulled down.
+
+| USB pair | run A (fader up) | run B (fader down) | Δ | therefore |
+|---|---|---|---|---|
+| 1/2 | −12.9 dBFS | −33.7 dBFS | **−20.8 dB** | **MAIN** (post-fader) |
+| 3/4 | −6.7 dBFS | −6.4 dBFS | +0.3 (noise) | **CH1 tap** (pre-fader) |
+| 5/6 | silent | silent | — | CH2 or AUX (not disambiguated) |
+| 7/8 | silent | silent | — | CH2 or AUX (not disambiguated) |
+
+`SAVE_CHANNELS` was changed from `3,4` to `1,2` on the Pi and in
+`deploy/dashcam.env.example`.
+
+**Why the fader test is the better discriminator.** The move-to-CH2 test in
+Steps 2-3 identifies MAIN as the pair active in both runs, but it cannot tell a
+post-fader main bus from a pre-fader one, and it needs re-patching between runs.
+Watching a single pair respond to the fader answers the question the owner
+actually asked, in one cable position.
+
+**Confirmed end-to-end.** A capture taken after the change spans the fader move
+itself: 0-20 s reads mean −45.6 / max −30.4 dBFS, and 20-64 s reads mean −24.9 /
+max −9.8 — a 20.6 dB step matching the probe. The old 3/4 takes both peaked at
+exactly −3.15 dBFS regardless of content, which the plan flagged as weak evidence
+for MAIN; that ceiling was in fact the channel strip's own limiter, i.e. evidence
+for the opposite conclusion.
+
+#### The original two-run procedure, if the map is ever in doubt again
 
 | USB pair | active in run A (src in CH1) | active in run B (src in CH2) | therefore |
 |---|---|---|---|
@@ -505,7 +535,7 @@ Fill this in from the two runs:
 - Active in **B only** → **CH2**
 - Active in **neither** → **AUX**
 
-- [ ] **Step 5: Set `SAVE_CHANNELS` to the MAIN pair**
+- [x] **Step 5: Set `SAVE_CHANNELS` to the MAIN pair**
 
 If MAIN turns out not to be 3/4, edit the Pi's config:
 ```bash
@@ -518,7 +548,7 @@ Then confirm:
 curl -s http://${DASHCAM_HOST#*@}/api/status | python3 -m json.tool | grep -A3 save_channels
 ```
 
-- [ ] **Step 6: Prove it end-to-end with a real capture**
+- [x] **Step 6: Prove it end-to-end with a real capture**
 
 With something playing through the mixer, hit Capture in the UI, then:
 ```bash
