@@ -34,6 +34,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/jams", a.handleJams).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/trigger", a.handleTrigger).Methods(http.MethodPost)
 	r.HandleFunc("/api/delete", a.handleDelete).Methods(http.MethodDelete)
+	r.HandleFunc("/api/take", a.handleTakePatch).Methods(http.MethodPatch)
 	r.HandleFunc("/api/download", a.handleDownload).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/peaks", a.handlePeaks).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
@@ -243,4 +244,71 @@ func statModTime(f *os.File) (t time.Time) {
 		return fi.ModTime()
 	}
 	return
+}
+
+// maxLabelLen caps a user-supplied take label. Long enough for a real name,
+// short enough that the sidecar cannot be used as storage.
+const maxLabelLen = 120
+
+// handleTakePatch merges fields into a take's sidecar. It is a merge, not a
+// replace: pointers (and a RawMessage for trim) distinguish "field absent"
+// from "field set to its zero value", so starring a take cannot silently clear
+// its label.
+func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	wav := filepath.Join(a.cfg.OutputDir, name)
+	if _, err := os.Stat(wav); err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	var body struct {
+		Label   *string         `json:"label"`
+		Starred *bool           `json:"starred"`
+		Trim    json.RawMessage `json:"trim"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	m := audio.ReadMeta(wav)
+
+	if body.Label != nil {
+		label := strings.TrimSpace(*body.Label)
+		if len(label) > maxLabelLen {
+			label = label[:maxLabelLen]
+		}
+		m.Label = label
+	}
+	if body.Starred != nil {
+		m.Starred = *body.Starred
+	}
+	if body.Trim != nil {
+		if string(body.Trim) == "null" {
+			m.Trim = nil
+		} else {
+			var tr audio.Trim
+			if err := json.Unmarshal(body.Trim, &tr); err != nil {
+				writeErr(w, http.StatusBadRequest, "invalid trim")
+				return
+			}
+			if tr.StartFrame < 0 || tr.EndFrame <= tr.StartFrame {
+				writeErr(w, http.StatusBadRequest, "trim end_frame must be greater than start_frame")
+				return
+			}
+			m.Trim = &tr
+		}
+	}
+
+	if err := audio.WriteMeta(wav, m); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
 }
