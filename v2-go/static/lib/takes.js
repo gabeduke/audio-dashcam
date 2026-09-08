@@ -54,6 +54,28 @@ export class TakesList {
     this.fresh = name;
   }
 
+  // Same shape as confirmDelete below: drop the ETag and re-fetch. Metadata
+  // writes are rare and user-initiated, the server owns ordering, and starring
+  // reorders the list.
+  async patchTake(name, patch) {
+    const res = await fetch(`/api/take?file=${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const msg = await res.json().then((j) => j.error).catch(() => res.statusText);
+      throw new Error(msg);
+    }
+    // The write has landed. A failure past this point is a stale list, not a
+    // failed write, and must not be thrown to a caller whose catch says
+    // "could not star" — the next poll reconciles.
+    this.etag = null;
+    try {
+      await this.refresh();
+    } catch { /* next poll picks it up */ }
+  }
+
   async refresh() {
     const headers = {};
     if (this.etag) headers['If-None-Match'] = this.etag;
@@ -100,7 +122,9 @@ export class TakesList {
     el.dataset.name = t.name;
     el.innerHTML = `
       <div class="take-head">
-        <span class="take-name"></span>
+        <button class="star" type="button" aria-pressed="false" aria-label="Star this take">★</button>
+        <button class="take-name" type="button" title="Rename"></button>
+        <input class="take-name-input" type="text" maxlength="120" hidden>
         <span class="take-meta"></span>
       </div>
       <div class="wave pending">waveform pending…</div>
@@ -114,6 +138,9 @@ export class TakesList {
       name: t.name,
       el,
       nameEl: el.querySelector('.take-name'),
+      nameInput: el.querySelector('.take-name-input'),
+      starBtn: el.querySelector('.star'),
+      editing: false,
       metaEl: el.querySelector('.take-meta'),
       waveEl: el.querySelector('.wave'),
       playBtn: el.querySelector('.play'),
@@ -128,6 +155,18 @@ export class TakesList {
     row.playBtn.addEventListener('click', () => this.togglePlay(row));
     row.delBtn.addEventListener('click', () => this.confirmDelete(row));
 
+    row.starBtn.addEventListener('click', async () => {
+      const next = !row.data.starred;
+      row.starBtn.disabled = true;
+      try {
+        await this.patchTake(row.name, { starred: next });
+      } catch (err) {
+        this.onToast?.(`Could not star: ${err.message}`, 'bad');
+      } finally {
+        row.starBtn.disabled = false;
+      }
+    });
+
     if (this.fresh === t.name) {
       el.classList.add('fresh');
       this.fresh = null;
@@ -140,6 +179,8 @@ export class TakesList {
 
   updateRow(row, t) {
     row.data = t;
+    row.starBtn.setAttribute('aria-pressed', t.starred ? 'true' : 'false');
+    row.starBtn.classList.toggle('on', !!t.starred);
     row.nameEl.textContent = t.name.replace(/^jam_|\.wav$/g, '');
     row.metaEl.textContent = `${fmtTime(t.duration_seconds)} · ${fmtSize(t.size_mb)}`;
     row.dlEl.href = `/api/download?file=${encodeURIComponent(t.name)}&dl=1`;
