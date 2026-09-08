@@ -2,6 +2,7 @@ package audio
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,10 @@ type Meta struct {
 	Starred bool   `json:"starred,omitempty"`
 	Trim    *Trim  `json:"trim,omitempty"`
 }
+
+// ErrNewerSidecar reports a sidecar written by a build that knew fields this
+// one does not. Rewriting it would drop them.
+var ErrNewerSidecar = errors.New("sidecar was written by a newer version")
 
 // metaPath returns the sidecar path for a take's wav path.
 func metaPath(wav string) string { return strings.TrimSuffix(wav, ".wav") + ".meta.json" }
@@ -73,7 +78,7 @@ func WriteMeta(wav string, m Meta) error {
 	// represent fields it does not know about, and silently dropping them
 	// would be worse than failing.
 	if m.Version > MetaVersion {
-		return fmt.Errorf("sidecar is version %d, this build writes %d", m.Version, MetaVersion)
+		return fmt.Errorf("%w: sidecar is version %d, this build writes %d", ErrNewerSidecar, m.Version, MetaVersion)
 	}
 	m.Version = MetaVersion
 

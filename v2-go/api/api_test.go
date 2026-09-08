@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gabeduke/audio-dashcam/v2-go/audio"
 	"github.com/gabeduke/audio-dashcam/v2-go/config"
@@ -135,12 +136,27 @@ func TestPatchTakeUnknownFileIs404(t *testing.T) {
 }
 
 func TestPatchTakeRejectsTraversal(t *testing.T) {
-	r, _ := newTestAPI(t)
+	r, dir := newTestAPI(t)
+
+	// Plant a real take one directory above OutputDir so a guard regression
+	// that let ".." through would have a live target to write a sidecar into,
+	// rather than the test passing by luck of there being nothing to escape to.
+	parent := filepath.Dir(dir)
+	escape := filepath.Join(parent, "escape.wav")
+	if err := os.WriteFile(escape, []byte("not a real wav"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(escape) })
+
 	for _, bad := range []string{"..%2Fescape.wav", "sub%2Fjam.wav", "jam_a.txt"} {
 		w := patch(t, r, bad, `{"starred":true}`)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("file=%q: status = %d, want 400", bad, w.Code)
 		}
+	}
+
+	if _, err := os.Stat(filepath.Join(parent, "escape.meta.json")); err == nil {
+		t.Error("a sidecar was written outside OutputDir: traversal guard was bypassed")
 	}
 }
 
@@ -162,5 +178,68 @@ func TestPatchTakeTrimsAndCapsLabel(t *testing.T) {
 	}
 	if m := audio.ReadMeta(wav); len(m.Label) != maxLabelLen {
 		t.Errorf("len(Label) = %d, want it capped at %d", len(m.Label), maxLabelLen)
+	}
+}
+
+func TestPatchTakeCapsMultiByteLabelByRune(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeTake(t, dir, "jam_a.wav")
+
+	// 60 ASCII runes (60 bytes) followed by 100 three-byte runes (300 bytes):
+	// a byte-based cut at maxLabelLen (120 bytes) never even reaches the 61st
+	// rune, landing only 20 "あ" runes in (60+20*3=120 bytes exactly) for 80
+	// runes total. A correct rune-based cut keeps the first 120 runes
+	// (60 ASCII + 60 "あ"). Deliberately not the report's single-rune
+	// reproducer: that one's stray byte gets replaced with exactly one U+FFFD
+	// by json.Marshal, which by coincidence still counts to maxLabelLen runes
+	// even under the old buggy code, so it wouldn't actually catch a
+	// regression back to byte slicing.
+	label := strings.Repeat("x", 60) + strings.Repeat("あ", 100)
+	body, _ := json.Marshal(map[string]string{"label": label})
+	if w := patch(t, r, "jam_a.wav", string(body)); w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	m := audio.ReadMeta(wav)
+	if !utf8.ValidString(m.Label) {
+		t.Fatalf("Label is not valid UTF-8: %q", m.Label)
+	}
+	if n := utf8.RuneCountInString(m.Label); n != maxLabelLen {
+		t.Errorf("rune count = %d, want %d", n, maxLabelLen)
+	}
+	want := strings.Repeat("x", 60) + strings.Repeat("あ", 60)
+	if m.Label != want {
+		t.Errorf("Label = %q, want %q", m.Label, want)
+	}
+}
+
+func TestPatchTakeNewerSidecarIs409(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeTake(t, dir, "jam_a.wav")
+
+	// Written by a hypothetical future build that knows fields this one
+	// doesn't; the sidecar naming convention (jam_x.meta.json) is fixed, so
+	// this constructs the same path audio.metaPath would without importing it.
+	sidecar := strings.TrimSuffix(wav, ".wav") + ".meta.json"
+	if err := os.WriteFile(sidecar, []byte(`{"version":99,"label":"future"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := patch(t, r, "jam_a.wav", `{"starred":true}`)
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 for a sidecar from a newer version (body %s)", w.Code, w.Body.String())
+	}
+}
+
+func TestTakeRouteRejectsOtherMethods(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_a.wav")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/take?file=jam_a.wav", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405 for POST /api/take", w.Code)
 	}
 }

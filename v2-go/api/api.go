@@ -7,12 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gabeduke/audio-dashcam/v2-go/audio"
 	"github.com/gabeduke/audio-dashcam/v2-go/config"
@@ -246,8 +250,10 @@ func statModTime(f *os.File) (t time.Time) {
 	return
 }
 
-// maxLabelLen caps a user-supplied take label. Long enough for a real name,
-// short enough that the sidecar cannot be used as storage.
+// maxLabelLen caps a user-supplied take label, in characters (runes), not
+// bytes — a multi-byte label must not get a shorter effective cap than an
+// ASCII one. Long enough for a real name, short enough that the sidecar
+// cannot be used as storage.
 const maxLabelLen = 120
 
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a
@@ -262,29 +268,33 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wav := filepath.Join(a.cfg.OutputDir, name)
-	if _, err := os.Stat(wav); err != nil {
+	fi, err := os.Stat(wav)
+	if err != nil || !fi.Mode().IsRegular() {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
 
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	var body struct {
 		Label   *string         `json:"label"`
 		Starred *bool           `json:"starred"`
 		Trim    json.RawMessage `json:"trim"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
+	if err := dec.Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	// A second JSON value in the body (e.g. two concatenated objects) would
+	// otherwise be silently ignored, applying only the first.
+	if dec.More() {
+		writeErr(w, http.StatusBadRequest, "unexpected trailing content in body")
 		return
 	}
 
 	m := audio.ReadMeta(wav)
 
 	if body.Label != nil {
-		label := strings.TrimSpace(*body.Label)
-		if len(label) > maxLabelLen {
-			label = label[:maxLabelLen]
-		}
-		m.Label = label
+		m.Label = sanitizeLabel(*body.Label)
 	}
 	if body.Starred != nil {
 		m.Starred = *body.Starred
@@ -307,8 +317,47 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := audio.WriteMeta(wav, m); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		switch {
+		case errors.Is(err, audio.ErrNewerSidecar):
+			writeErr(w, http.StatusConflict, "this take was edited by a newer version")
+		case errors.Is(err, syscall.ENOSPC):
+			writeErr(w, http.StatusInsufficientStorage, "disk full")
+		default:
+			// The real error names absolute paths and the temp-file scheme, so log
+			// it and keep it off the wire.
+			log.Printf("take patch %s: %v", name, err)
+			writeErr(w, http.StatusInternalServerError, "could not save")
+		}
 		return
 	}
-	writeJSON(w, http.StatusOK, m)
+
+	// Explicit rather than returning audio.Meta: its omitempty tags would drop
+	// the very fields a clear-to-empty patch just changed, and version is
+	// internal.
+	writeJSON(w, http.StatusOK, struct {
+		Label   string      `json:"label"`
+		Starred bool        `json:"starred"`
+		Trim    *audio.Trim `json:"trim"`
+	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim})
+}
+
+// sanitizeLabel prepares a user-supplied label for storage. It strips control
+// characters and Unicode format characters (category Cf — a right-to-left
+// override, a zero-width space) that are invisible or misleading when
+// rendered; this is about display integrity, not injection, since the label
+// is never interpreted as markup or code. It then trims surrounding
+// whitespace and caps the result by rune count, not byte count, so a
+// multi-byte label isn't truncated mid-rune.
+func sanitizeLabel(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if utf8.RuneCountInString(s) > maxLabelLen {
+		s = string([]rune(s)[:maxLabelLen])
+	}
+	return s
 }
