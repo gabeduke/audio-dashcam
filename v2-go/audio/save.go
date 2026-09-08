@@ -227,7 +227,14 @@ func ListTakes(dir string) ([]Take, error) {
 
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
+	// Starred first, then newest. Starring is how a take is kept in reach once
+	// newer ones have pushed it down the list.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Starred != out[j].Starred {
+			return out[i].Starred
+		}
+		return out[i].Created.After(out[j].Created)
+	})
 	return out, nil
 }
 

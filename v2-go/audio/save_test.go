@@ -79,3 +79,34 @@ func TestListTakesIgnoresSidecarsAsTakes(t *testing.T) {
 		t.Fatalf("got %d takes, want 1 — the .meta.json must not be listed", len(takes))
 	}
 }
+
+func TestListTakesSortsStarredFirstThenNewest(t *testing.T) {
+	dir := t.TempDir()
+	// Oldest is starred, so ordering by date alone would put it last.
+	oldStarred := writeFakeTake(t, dir, "jam_old_starred.wav", 3*time.Hour)
+	writeFakeTake(t, dir, "jam_newest.wav", 1*time.Minute)
+	writeFakeTake(t, dir, "jam_middle.wav", 1*time.Hour)
+
+	if err := WriteMeta(oldStarred, Meta{Starred: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	takes, err := ListTakes(dir)
+	if err != nil {
+		t.Fatalf("ListTakes: %v", err)
+	}
+
+	var got []string
+	for _, tk := range takes {
+		got = append(got, tk.Name)
+	}
+	want := []string{"jam_old_starred.wav", "jam_newest.wav", "jam_middle.wav"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
