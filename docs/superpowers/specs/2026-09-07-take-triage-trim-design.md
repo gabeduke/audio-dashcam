@@ -47,12 +47,15 @@ Three additions, each small, each reusing code that already exists.
 ```json
 {
   "version": 1,
-  "name": "the good one",
+  "label": "the good one",
   "starred": true,
   "trim": { "start_frame": 480000, "end_frame": 998400 }
 }
 ```
 
+- The human-readable name is `label`, not `name`. `Take.Name` is already the
+  take's filename and the row key in `takes.js`; one word cannot mean two
+  things in the same object.
 - Every field except `version` is optional. An **absent file means an untrimmed,
   unnamed take**, so all existing takes remain valid with zero migration.
 - `trim` absent or `null` = whole take.
