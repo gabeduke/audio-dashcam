@@ -74,7 +74,7 @@ this fix that can be tested without an audio interface plugged in.
 - Create: `v2-go/audio/palifecycle.go`
 - Test: `v2-go/audio/palifecycle_test.go`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `v2-go/audio/palifecycle_test.go`:
 
@@ -213,7 +213,7 @@ func TestInitErrorLeavesLifecycleDownSoRetryWorks(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run:
 ```bash
@@ -221,7 +221,7 @@ cd /Users/gabeduke/projects/audio-dashcam/v2-go && go test ./audio/ -run 'PALife
 ```
 Expected: compile failure — `undefined: newPALifecycle`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `v2-go/audio/palifecycle.go`:
 
@@ -296,7 +296,7 @@ func (p *paLifecycle) Rescan() error {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run:
 ```bash
@@ -304,7 +304,7 @@ cd /Users/gabeduke/projects/audio-dashcam/v2-go && go test ./audio/ -run 'Init|T
 ```
 Expected: all five tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam
@@ -324,7 +324,7 @@ method; wiring it into the supervisor is the next commit."
 **Files:**
 - Modify: `v2-go/audio/capture.go` (struct fields, `NewCapture`, `Start`, `Stop`, `supervise`)
 
-- [ ] **Step 1: Add the field to the Capture struct**
+- [x] **Step 1: Add the field to the Capture struct**
 
 In `v2-go/audio/capture.go`, find the `Capture` struct and add `pa` immediately
 after the `saver`-adjacent fields — specifically after the `levels` field:
@@ -340,7 +340,7 @@ type Capture struct {
 	filled chan []int32
 ```
 
-- [ ] **Step 2: Construct it in NewCapture**
+- [x] **Step 2: Construct it in NewCapture**
 
 In `NewCapture`, add the `pa` field to the struct literal:
 
@@ -356,7 +356,7 @@ In `NewCapture`, add the `pa` field to the struct literal:
 	}
 ```
 
-- [ ] **Step 3: Route Start and Stop through the lifecycle**
+- [x] **Step 3: Route Start and Stop through the lifecycle**
 
 Replace the opening of `Start`:
 
@@ -389,7 +389,7 @@ func (c *Capture) Stop() {
 }
 ```
 
-- [ ] **Step 4: Rescan on the retry path**
+- [x] **Step 4: Rescan on the retry path**
 
 In `supervise()`, find the `openStream` failure branch and add the rescan
 *after* the backoff sleep, so the next attempt sees a fresh device list:
@@ -422,7 +422,7 @@ against the stale list before this rescan runs. That is intentional — it keeps
 one code path and avoids rescanning on transient errors that are not about the
 device disappearing. The cost is roughly one extra second before recovery.
 
-- [ ] **Step 5: Verify the build and the whole suite**
+- [x] **Step 5: Verify the build and the whole suite**
 
 Run:
 ```bash
@@ -431,7 +431,7 @@ cd /Users/gabeduke/projects/audio-dashcam/v2-go && go build ./... && go vet ./..
 Expected: no build errors, no vet output, no files listed by `gofmt -l`, all
 tests pass (31 tests: the 26 existing plus the 5 new).
 
-- [ ] **Step 6: Confirm `portaudio` is still an import that is used**
+- [x] **Step 6: Confirm `portaudio` is still an import that is used**
 
 `capture.go` still references `portaudio.OpenStream`, `portaudio.Devices`,
 `portaudio.HighLatencyParameters`, `portaudio.DeviceInfo` and `portaudio.Stream`,
@@ -442,7 +442,7 @@ cd /Users/gabeduke/projects/audio-dashcam/v2-go && grep -c 'portaudio\.' audio/c
 ```
 Expected: a count of 7 or more.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam
@@ -465,14 +465,14 @@ Rescan after each failed open so the device is picked up when it returns."
 This cannot be unit tested; it needs the physical interface. Do not mark the
 work complete until this passes.
 
-- [ ] **Step 1: Deploy**
+- [x] **Step 1: Deploy**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam && ./deploy.sh
 ```
 Expected: `[*] done`, and the trailing `curl` prints a status JSON blob.
 
-- [ ] **Step 2: Confirm a healthy baseline with the interface ON**
+- [x] **Step 2: Confirm a healthy baseline with the interface ON**
 
 ```bash
 curl -s http://${DASHCAM_HOST#*@}/api/status | python3 -m json.tool | grep -E 'capture_healthy|last_error|device'
@@ -484,7 +484,7 @@ Expected:
 "device": "EP-136: USB Audio (hw:2,0)",
 ```
 
-- [ ] **Step 3: Start watching the log**
+- [x] **Step 3: Start watching the log**
 
 In one terminal:
 ```bash
@@ -492,7 +492,7 @@ ssh "$DASHCAM_HOST" 'journalctl _SYSTEMD_USER_UNIT=audio-dashcam.service -f' \
   | grep -viE "ALSA lib|Expression .* failed|snd_config"
 ```
 
-- [ ] **Step 4: Power the EP-136 off. Wait 15 seconds.**
+- [x] **Step 4: Power the EP-136 off. Wait 15 seconds.**
 
 Expected in the log:
 ```
@@ -501,7 +501,7 @@ Expected in the log:
 ```
 and then the retries continue. This part is unchanged from the old behaviour.
 
-- [ ] **Step 5: Power the EP-136 back on. Wait up to 40 seconds.**
+- [x] **Step 5: Power the EP-136 back on. Wait up to 40 seconds.**
 
 Expected — the line that proves the fix:
 ```
@@ -511,7 +511,7 @@ Expected — the line that proves the fix:
 **This is the pass/fail criterion.** Before the fix this line never appeared;
 the retry loop ran for 50 minutes without recovering.
 
-- [ ] **Step 6: Confirm health came back without a restart**
+- [x] **Step 6: Confirm health came back without a restart**
 
 ```bash
 curl -s http://${DASHCAM_HOST#*@}/api/status | python3 -m json.tool | grep -E 'capture_healthy|last_error'
@@ -520,14 +520,14 @@ ssh "$DASHCAM_HOST" 'systemctl --user show audio-dashcam.service -p MainPID --va
 Expected: `"capture_healthy": true`, `"last_error": ""`, and the **same PID as
 before the power cycle** — proving it recovered rather than being restarted.
 
-- [ ] **Step 7: Note the card index**
+- [x] **Step 7: Note the card index**
 
 If the interface came back on a different ALSA card (`hw:1,0` rather than
 `hw:2,0`), record that in the commit message below — it confirms the rescan is
 doing real work and that matching on the `EP-136` substring rather than a fixed
 index is what makes it robust.
 
-- [ ] **Step 8: Commit the verification note**
+- [x] **Step 8: Commit the verification note**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam
@@ -536,6 +536,34 @@ git commit --allow-empty -m "Verify hot-plug recovery on hardware
 Powered the EP-136 off and on with the service untouched; capture came back
 on its own and the PID was unchanged."
 ```
+
+---
+
+## Executed and verified 2026-09-08
+
+All three tasks done. Commits `e0421ea` (paLifecycle), `bcff42d` (rescan on the
+retry path), `998f8ab` (hardware verification). 34 tests green, `go vet`,
+`gofmt` and `-race` clean.
+
+**Hardware pass: recovered on its own in ~30s with the PID unchanged.** The
+`[*] capture live on ...` line appeared, which it never did before the fix.
+
+Three things worth carrying forward that the plan did not anticipate:
+
+1. **The error message changes, and that is itself proof.** While the interface
+   was off the log now reads `no input device with >=8 channels` rather than
+   `open "EP-136: ...": Illegal combination of I/O devices`. That is the exact
+   discriminator this plan used to diagnose the bug, running in reverse: the old
+   message proved the device list was stale, the new one proves it is accurate.
+2. **The card index did not change** (it came back on `hw:2,0`), so Step 7's
+   robustness case is still unexercised. Substring matching on `EP-136` should
+   cover it, but that is reasoning rather than evidence.
+3. **The log is noisier.** Each rescan re-probes the host APIs, so every retry
+   emits a block of JACK "cannot connect to server" lines. Harmless, but worth
+   filtering if the log is ever read in anger.
+
+The plan predicted 31 tests (26 + 5); the real number is 34, because three
+tests were added to `levels_test.go` after this plan was written.
 
 ---
 
