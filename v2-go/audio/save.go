@@ -178,6 +178,12 @@ type Take struct {
 	HasPreview bool      `json:"has_preview"`
 	HasPeaks   bool      `json:"has_peaks"`
 	Preview    string    `json:"preview_name"`
+
+	// From the sidecar. Name above is the filename; Label is what the user
+	// called it.
+	Label   string `json:"label"`
+	Starred bool   `json:"starred"`
+	Trim    *Trim  `json:"trim,omitempty"`
 }
 
 // ListTakes returns takes newest first. Duration and layout come from each
@@ -213,6 +219,12 @@ func ListTakes(dir string) ([]Take, error) {
 			t.Channels = wi.Channels
 			t.SampleRate = wi.SampleRate
 		}
+
+		m := ReadMeta(full)
+		t.Label = m.Label
+		t.Starred = m.Starred
+		t.Trim = m.Trim
+
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
