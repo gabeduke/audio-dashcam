@@ -56,7 +56,7 @@ width changes, and it already listens for `orientationchange`.
 Do this first: every later task iterates on CSS, and a full `deploy.sh` rebuilds
 the cgo binary on a Raspberry Pi for no reason.
 
-- [ ] **Step 1: Add the fast path**
+- [x] **Step 1: Add the fast path**
 
 In `deploy.sh`, immediately after the line
 `DEST="${DASHCAM_DEST:-audio-dashcam}"`, insert:
@@ -74,7 +74,7 @@ if [ "${1:-}" = "--static" ]; then
 fi
 ```
 
-- [ ] **Step 2: Verify it works and changes nothing else**
+- [x] **Step 2: Verify it works and changes nothing else**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam
@@ -83,14 +83,14 @@ curl -sS http://${DASHCAM_HOST#*@}/styles.css | head -3
 ```
 Expected: the sync reports done in a second or two, and the CSS comes back.
 
-- [ ] **Step 3: Verify the full path still works**
+- [x] **Step 3: Verify the full path still works**
 
 ```bash
 ./deploy.sh
 ```
 Expected: unchanged behaviour — sync, build on the Pi, restart, status JSON.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add deploy.sh
@@ -107,7 +107,7 @@ reason to rebuild a cgo binary on a Pi to change a stylesheet."
 **Files:**
 - Modify: `v2-go/static/index.html`
 
-- [ ] **Step 1: Restructure `<main>`**
+- [x] **Step 1: Restructure `<main>`**
 
 Replace the entire `<main>` element in `v2-go/static/index.html` with:
 
@@ -172,7 +172,7 @@ Replace the entire `<main>` element in `v2-go/static/index.html` with:
 
 Every `id` is unchanged and in the same order, so no JavaScript is affected.
 
-- [ ] **Step 2: Add the `.col` base rule so mobile is unchanged**
+- [x] **Step 2: Add the `.col` base rule so mobile is unchanged**
 
 In `v2-go/static/styles.css`, in the `/* ---------- layout ---------- */`
 section, immediately after the `main { ... }` rule, add:
@@ -193,7 +193,7 @@ section, immediately after the `main { ... }` rule, add:
 would refuse to shrink below its content and reintroduce the horizontal
 overflow that the top bar already had to be fixed for once.
 
-- [ ] **Step 3: Deploy and confirm nothing changed on mobile**
+- [x] **Step 3: Deploy and confirm nothing changed on mobile**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam && ./deploy.sh --static
@@ -203,7 +203,7 @@ Open `http://${DASHCAM_HOST#*@}/` at 390×844 in a browser. Expect the layout to
 pixel-identical to before: three stacked panels, 14px gaps, no horizontal
 scroll.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add v2-go/static/index.html v2-go/static/styles.css
@@ -220,7 +220,7 @@ it did. This is the structure the two-column landscape layout needs."
 **Files:**
 - Modify: `v2-go/static/styles.css`
 
-- [ ] **Step 1: Add the top bar height variable**
+- [x] **Step 1: Add the top bar height variable**
 
 In `styles.css`, inside `:root`, add after `--tap: 48px;`:
 
@@ -230,7 +230,7 @@ In `styles.css`, inside `:root`, add after `--tap: 48px;`:
   --topbar-h:  calc(45px + env(safe-area-inset-top));
 ```
 
-- [ ] **Step 2: Replace the whole "wider screens" section**
+- [x] **Step 2: Replace the whole "wider screens" section**
 
 At the bottom of `styles.css`, replace this:
 
@@ -312,13 +312,13 @@ purpose: at 860px the visualiser now lives in a ~390px column, where 200px tall
 is out of proportion. 160px there, growing to 190px at 1200px, keeps roughly
 the aspect it has on a phone.
 
-- [ ] **Step 3: Deploy**
+- [x] **Step 3: Deploy**
 
 ```bash
 cd /Users/gabeduke/projects/audio-dashcam && ./deploy.sh --static
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add v2-go/static/styles.css
@@ -331,6 +331,37 @@ Capture is reachable without scrolling on a short screen. Triggers on width
 
 ---
 
+> **Executed 2026-09-08. Results, including one real failure the plan did not
+> anticipate and two findings worth carrying forward:**
+>
+> **The 844×390 phone-landscape case failed on the first run** — Capture at
+> bottom 499 against a 390px viewport. The `max-height: 560px` tier is tuned for
+> a 1024×600 tablet and leaves the monitor column ~130px too tall on a phone
+> held sideways, which is precisely the failure this layout exists to prevent.
+> Fixed by adding a second, tighter tier at `max-height: 440px` that drops the
+> input-channels disclosure, the "last saved" line and the visible panel heading
+> (kept in the a11y tree via clip, not `display: none`), and takes the
+> visualiser to 64px. The meters and stats row were deliberately kept: buffered
+> seconds is the number you check *before* deciding to hit Capture.
+>
+> **The 2-column landscape layout needs ≥383px of height.** Every real target
+> device clears it — Pixel 10 915×412, iPhone 15 852×393, 15 Pro Max 932×430,
+> and tablets by a wide margin. A synthetic 740×360 does not, and was left
+> failing rather than trading away the stats row for a size no target has.
+> iPhone SE landscape (667×375) correctly stays 1-column, below the 700px trigger.
+>
+> **Pre-existing, not introduced here, not fixed here:** `.seg button` has
+> `min-height: 40px`, so the duration selector's tap targets are 40px on *every*
+> viewport including mobile portrait — below both the 44px floor the check
+> asserts for stars and this project's own `--tap: 48px`. The plan's claim that
+> "tap targets stay at the `--tap: 48px` they are now" is not accurate about the
+> current state. Worth a separate one-line fix.
+>
+> Sticky was verified by padding the takes list in the DOM client-side (nothing
+> written to the device): the monitor column pins at top 61px and holds through
+> 2071px of scroll with Capture visible throughout. Canvas DPR sizing re-checked
+> at four viewports and is correct.
+
 ### Task 4: Verify across the viewport matrix
 
 **Files:**
@@ -340,7 +371,7 @@ This repo has no JS test harness and none is being added; the established
 pattern here is a throwaway Playwright script in the session scratchpad, which
 is how defect 7 was found during the take-triage work. Follow it.
 
-- [ ] **Step 1: Write the check script**
+- [x] **Step 1: Write the check script**
 
 Create `layout-check.mjs` in the session scratchpad directory:
 
@@ -407,7 +438,7 @@ console.log(failures ? `\n${failures} viewport(s) failed` : '\nall viewports pas
 process.exit(failures ? 1 : 0);
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 cd "$SCRATCHPAD"   # the session scratchpad directory
@@ -429,7 +460,7 @@ ok   desktop 1440x900  2col
 all viewports pass
 ```
 
-- [ ] **Step 3: Look at the screenshots**
+- [x] **Step 3: Look at the screenshots**
 
 The script writes `shot-<w>x<h>.png` for each viewport. Open
 `shot-1024x768.png` and `shot-844x390.png` and check by eye:
@@ -441,7 +472,7 @@ The script writes `shot-<w>x<h>.png` for each viewport. Open
 
 Automated checks catch overflow and geometry; they do not catch ugly.
 
-- [ ] **Step 4: Check the sticky behaviour by hand**
+- [x] **Step 4: Check the sticky behaviour by hand**
 
 At 1024×768, with enough takes to make the right column taller than the
 viewport, scroll down. The monitor column should stay parked below the top bar
@@ -452,7 +483,7 @@ If there are not enough takes on the device to overflow, that is fine — note
 it and re-check after the next few captures rather than manufacturing takes on
 a real device.
 
-- [ ] **Step 5: Confirm the visualiser resized correctly**
+- [x] **Step 5: Confirm the visualiser resized correctly**
 
 The canvas is sized from a `ResizeObserver`, and a stale canvas size was one of
 the original seven bugs. At 1024×768 check in DevTools that

@@ -16,6 +16,9 @@
   --danger:    #f87171;
   --radius:    14px;
   --tap:       48px;
+  /* 10px top padding + 24px logo + 10px bottom padding + 1px border. The
+     sticky monitor column parks just below it. */
+  --topbar-h:  calc(45px + env(safe-area-inset-top));
 
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
           "Helvetica Neue", Arial, sans-serif;
@@ -89,6 +92,16 @@ main {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* On a phone the columns are just pass-through containers: main is still one
+   flex column and the panels still stack in source order. They only become
+   real columns at the breakpoints at the bottom of this file. */
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
 .panel {
@@ -422,11 +435,86 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
 
 @media (min-width: 620px) {
   main { padding: 18px 16px 48px; gap: 16px; }
+  .col { gap: 16px; }
   .panel { padding: 18px; }
   .viz-wrap { height: 172px; }
   .take-actions { gap: 8px; }
 }
 
-@media (min-width: 860px) {
-  .viz-wrap { height: 200px; }
+/* Two columns once there is width to spare -- and also on a short landscape
+   screen wide enough to take it, even a phone held sideways. Height is what a
+   landscape screen is short of, and the thing worth protecting is the Capture
+   button: you have just played something and want to hit it without hunting
+   for it. */
+@media (min-width: 860px),
+       (orientation: landscape) and (min-width: 700px) and (max-height: 560px) {
+  main {
+    max-width: 1240px;
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    align-items: start;
+  }
+
+  /* Sticky inside its grid area, so the meters and Capture stay in place while
+     a long takes list scrolls past them. Needs align-items:start above, or the
+     item would stretch to the row height and have nowhere to slide. */
+  .col-monitor {
+    position: sticky;
+    top: calc(var(--topbar-h) + 16px);
+  }
+
+  .viz-wrap { height: 160px; }
+}
+
+@media (min-width: 1200px) {
+  main { max-width: 1320px; }
+  .viz-wrap { height: 190px; }
+  .wave { height: 60px; }
+}
+
+/* Short landscape: height is the scarce resource, so claw it back. This has to
+   come last -- a 1024x600 tablet matches the width rule above as well, and the
+   heights here are the ones that should win. */
+@media (orientation: landscape) and (max-height: 560px) {
+  main { padding-top: 10px; gap: 12px; }
+  .col { gap: 12px; }
+  .panel { padding: 12px; }
+  .viz-wrap { height: 96px; }
+  .capture-btn { min-height: 50px; margin-top: 10px; }
+  .wave { height: 40px; }
+  .last { margin: 8px 0 0; }
+}
+
+/* A phone held sideways, roughly 390px tall. The tier above is tuned for a
+   1024x600 tablet and leaves the monitor column about 130px too tall here,
+   which puts Capture below the fold -- the exact failure this layout exists to
+   prevent. So drop what is genuinely optional at this size.
+   
+   What is NOT dropped: the meters and the stats row, because "how much is
+   buffered" is the number you check before deciding to hit Capture; and the
+   tap targets, which stay at --tap. The input-channels disclosure is a
+   diagnostic, and the panel heading is redundant next to a button reading
+   "Capture" -- but it stays in the accessibility tree rather than being
+   display:none'd, since it is still the section's label. */
+@media (orientation: landscape) and (max-height: 440px) {
+  main { padding-top: 8px; gap: 10px; }
+  .col { gap: 8px; }
+  .panel { padding: 10px; }
+  .viz-wrap { height: 64px; }
+
+  .col-monitor #chan-diag { display: none; }
+  .last { display: none; }
+
+  .col-monitor .panel h2 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .capture-btn { min-height: var(--tap); margin-top: 8px; }
 }
