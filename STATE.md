@@ -87,14 +87,28 @@ Work is on branch **`feat/take-identity`**, not master.
 
 | Task | Status |
 |---|---|
-| 1. Sidecar type + atomic IO | implemented `c355b65`; spec review passed; quality review returned CHANGES REQUESTED; fixes in progress |
-| 2. Merge sidecar into ListTakes | queued |
-| 3. Starred-first ordering | queued |
-| 4. RemoveTake cleans the sidecar | queued |
-| 5. PATCH /api/take | queued |
+| 1. Sidecar type + atomic IO | **DONE** — `c355b65`, `6ddfef6`, `6d4e298`, `92ad231`. Both reviews passed, 10 tests. |
+| 2. Merge sidecar into ListTakes | **DONE** — `5bbe2cb`. Review clean, no issues. |
+| 3. Starred-first ordering | **DONE** — `195461a`, plus a doc-comment fix landing |
+| 4. RemoveTake cleans the sidecar | **DONE** — `0255de7` |
+| 5. PATCH /api/take | next — gets the full two-stage review |
 | 6. Star toggle (JS) | queued |
 | 7. Inline rename (JS) | queued |
 | 8. Styling + manual verification | queued |
+
+### Three defects found so far — all in the plan, none in the implementations
+
+1. **Version normalization defeated the version field** (Task 1) — see below.
+2. **The chmod fix had no regression coverage** (Task 1) — a reviewer proved it by
+   deleting the `os.Chmod` call and watching all nine tests stay green. Test added.
+3. **`ListTakes`' doc comment went stale** (Task 3) — the plan's prescriptive diff
+   changed the sort without updating the comment above it, leaving
+   "returns takes newest first" directly over a starred-first comparator. The
+   implementer flagged it rather than guessing; fixed, and the plan now carries an
+   explicit step for it.
+
+All three surfaced from reviewers and implementers pushing back, not from
+re-reading. Worth keeping the review layer for the remaining tasks.
 
 ### Review findings on Task 1 — both were flaws in the plan, not the code
 
@@ -111,6 +125,25 @@ Also applied: sidecar file mode `0644` to match the other sidecars (`os.CreateTe
 lands at `0600`), tests for the version cases and the update-in-place path, and a
 doc comment saying why `ReadMeta` is deliberately silent (`ListTakes` calls it
 per-take on a 5-second poll, so logging would be thousands of lines a day).
+
+### Where the code stands
+
+15 tests passing in `audio`. `go build ./...`, `go vet ./...`, `gofmt -l .` clean.
+The whole backend data layer is done bar the HTTP endpoint: the sidecar format
+and its atomic IO, the merge into `ListTakes`, starred-first ordering, and
+sidecar cleanup on delete. Nothing is wired to the UI yet — the frontend still
+ignores the new `label`/`starred` JSON fields, verified deliberately in review.
+
+### Dispatch shape
+
+Tasks 3 and 4 are being dispatched as one job: both are small pure additions to
+existing functions in the same file (`save.go` — a sort comparator and one
+`os.Remove`), against tests already written out in the plan. Their separate
+commits are preserved. Task 2 got its own dispatch because it changes the `Take`
+struct, which is the JSON contract the frontend consumes.
+
+Heavyweight (Opus) code-quality review is reserved for changes that define a
+contract. Task 1 earned it and it paid for itself; a sort comparator does not.
 
 ### Carried forward into Task 5
 

@@ -491,12 +491,20 @@ with:
 	})
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Update the `ListTakes` doc comment**
+
+Its first sentence currently reads "returns takes newest first", which this
+change makes false. A doc comment contradicting the comparator directly beneath
+it is worse than none, because a reader will trust it. Reword the first sentence
+to describe starred-first-then-newest; leave the second sentence about Duration
+and layout alone.
+
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `go test ./audio/ -v`
 Expected: PASS — all `Meta` and `ListTakes` tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add v2-go/audio/save.go v2-go/audio/save_test.go
