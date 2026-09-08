@@ -26,6 +26,7 @@ type Capture struct {
 	cfg    *config.Config
 	ring   *Ring
 	levels *Levels
+	pa     *paLifecycle
 
 	free   chan []int32
 	filled chan []int32
@@ -49,6 +50,7 @@ func NewCapture(cfg *config.Config) *Capture {
 		cfg:    cfg,
 		ring:   NewRing(cfg.RingFrames(), cfg.Channels),
 		levels: NewLevels(cfg.Channels, cfg.SampleRate, 10),
+		pa:     newPALifecycle(portaudio.Initialize, portaudio.Terminate),
 		free:   make(chan []int32, blockPoolSize),
 		filled: make(chan []int32, blockPoolSize),
 		stop:   make(chan struct{}),
@@ -85,8 +87,8 @@ func (c *Capture) BufferedSeconds() float64 {
 // Start brings up the ring writer, the level broadcaster and the supervised
 // audio stream. It returns immediately; use Healthy to observe state.
 func (c *Capture) Start() error {
-	if err := portaudio.Initialize(); err != nil {
-		return fmt.Errorf("portaudio init: %w", err)
+	if err := c.pa.Init(); err != nil {
+		return err
 	}
 
 	c.wg.Add(3)
@@ -154,6 +156,13 @@ func (c *Capture) supervise() {
 			}
 			if backoff < 15*time.Second {
 				backoff *= 2
+			}
+			// PortAudio's device list is frozen at Pa_Initialize, so an
+			// interface that was power-cycled is invisible until it is rebuilt.
+			// Safe here because the open failed: openStream never leaves a
+			// stream live on any of its error paths.
+			if err := c.pa.Rescan(); err != nil {
+				log.Printf("[!] portaudio rescan: %v", err)
 			}
 			continue
 		}
@@ -320,6 +329,6 @@ func (c *Capture) Stop() {
 		close(c.stop)
 		c.wg.Wait()
 		c.closeStream()
-		portaudio.Terminate()
+		_ = c.pa.Term()
 	})
 }
