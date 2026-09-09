@@ -44,6 +44,10 @@ type Levels struct {
 	// lastRMS holds the newest bin's per-channel dBFS independently of
 	// pending, so a Drain does not blank /api/status.
 	lastRMS []float32
+	// env retains bins past the 40ms Drain window so the ribbon can show audio
+	// from before the page was opened. Nil in tests and whenever the feature
+	// is not wired up.
+	env *Envelope
 
 	subsMu sync.Mutex
 	subs   map[chan Frame]struct{}
@@ -76,6 +80,15 @@ func NewLevels(channels, sampleRate, binMillis int) *Levels {
 		l.lastRMS[i] = FloorDB
 	}
 	return l
+}
+
+// SetEnvelope attaches a retained envelope. Bins are pushed to it as they
+// flush, which is the only way the ribbon can show audio from before the page
+// was opened.
+func (l *Levels) SetEnvelope(e *Envelope) {
+	l.mu.Lock()
+	l.env = e
+	l.mu.Unlock()
 }
 
 func (l *Levels) resetBin() {
@@ -140,6 +153,9 @@ func (l *Levels) flushBinLocked() {
 		}
 	}
 	copy(l.lastRMS, b.RMS)
+	if l.env != nil {
+		l.env.PushBin(b)
+	}
 	l.pending = append(l.pending, b)
 	// Bound the backlog if nobody is draining (no clients connected).
 	if len(l.pending) > 512 {

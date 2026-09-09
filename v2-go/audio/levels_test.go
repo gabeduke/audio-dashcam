@@ -65,3 +65,30 @@ func TestSnapshotTracksTheMostRecentBin(t *testing.T) {
 		t.Fatalf("a sub-floor bin should clamp to FloorDB, got %v", quiet)
 	}
 }
+
+func TestLevelsFeedTheEnvelope(t *testing.T) {
+	// The envelope exists so the ribbon can show audio from before the page
+	// was opened, which means bins must reach it whether or not anything is
+	// subscribed to the websocket.
+	l := NewLevels(2, 48000, 10) // 480 frames per bin
+	e := NewEnvelope(100, []int{0, 1}, 10)
+	l.SetEnvelope(e)
+
+	l.Accumulate(oneBinOfConstant(2, 480, 1<<29)) // 0.25, about -12 dBFS
+
+	if got := e.BufferedSeconds(); got < 0.009 || got > 0.011 {
+		t.Fatalf("envelope buffered %vs after one bin, want 0.01", got)
+	}
+	if got := e.Buckets(1)[0]; got != 204 {
+		t.Fatalf("envelope byte = %d, want 204", got)
+	}
+}
+
+func TestLevelsWithoutAnEnvelopeStillWork(t *testing.T) {
+	// Every existing test builds Levels with no envelope; that must stay valid.
+	l := NewLevels(2, 48000, 10)
+	l.Accumulate(oneBinOfConstant(2, 480, 1<<29))
+	if l.Snapshot()[0] <= FloorDB {
+		t.Fatal("Levels broke when no envelope was attached")
+	}
+}

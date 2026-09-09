@@ -21,11 +21,16 @@ const blockPoolSize = 64
 // staleAfter is how long without a callback before capture is declared dead.
 const staleAfter = 2 * time.Second
 
+// levelBinMillis is the width of one level bin. The envelope's capacity is
+// derived from it, so the two cannot drift.
+const levelBinMillis = 10
+
 // Capture owns the audio device, the ring buffer and the level meters.
 type Capture struct {
 	cfg    *config.Config
 	ring   *Ring
 	levels *Levels
+	env    *Envelope
 	pa     *paLifecycle
 
 	free   chan []int32
@@ -49,7 +54,7 @@ func NewCapture(cfg *config.Config) *Capture {
 	c := &Capture{
 		cfg:    cfg,
 		ring:   NewRing(cfg.RingFrames(), cfg.Channels),
-		levels: NewLevels(cfg.Channels, cfg.SampleRate, 10),
+		levels: NewLevels(cfg.Channels, cfg.SampleRate, levelBinMillis),
 		pa:     newPALifecycle(portaudio.Initialize, portaudio.Terminate),
 		free:   make(chan []int32, blockPoolSize),
 		filled: make(chan []int32, blockPoolSize),
@@ -59,6 +64,12 @@ func NewCapture(cfg *config.Config) *Capture {
 	for i := 0; i < blockPoolSize; i++ {
 		c.free <- make([]int32, blockLen)
 	}
+	// Capacity comes from the same RingSeconds as the audio ring, so the
+	// ribbon's timeline cannot drift from what Capture would actually write.
+	// SaveChannels is what the meters and the takes use, so the ribbon shows
+	// the same pair even under SAVE_ALL_CHANNELS.
+	c.env = NewEnvelope(cfg.RingSeconds*1000/levelBinMillis, cfg.SaveChannels, levelBinMillis)
+	c.levels.SetEnvelope(c.env)
 	c.deviceName.Store("")
 	c.lastErr.Store("")
 	return c
@@ -66,6 +77,8 @@ func NewCapture(cfg *config.Config) *Capture {
 
 func (c *Capture) Ring() *Ring     { return c.ring }
 func (c *Capture) Levels() *Levels { return c.levels }
+
+func (c *Capture) Envelope() *Envelope { return c.env }
 
 func (c *Capture) Healthy() bool {
 	if !c.healthy.Load() {
