@@ -11,7 +11,7 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 8192,
-	// The dashcam is a LAN appliance reached by hostname, IP and .local alias,
+	// Hindsight is a LAN appliance reached by hostname, IP and .local alias,
 	// so origin pinning would only break access without adding protection.
 	CheckOrigin: func(r *http.Request) bool { return true },
 }

@@ -210,8 +210,8 @@ func TestReaderStopIsIdempotent(t *testing.T) {
 // timestamps, and the near-zero intervals between them drag the rolling median
 // far above the real tempo.
 //
-// Seen on hardware: three seconds after a replug the dashcam reported 223.3
-// BPM against a true 120. scripts/midi-probe.py drains for exactly this reason.
+// Seen on hardware: three seconds after a replug Hindsight reported 223.3 BPM
+// against a true 120. scripts/midi-probe.py drains for exactly this reason.
 func TestReaderDropsTheBacklogItFindsOnOpen(t *testing.T) {
 	cards, snd, fifo := fifoFixture(t)
 	clock := NewClock(10000)

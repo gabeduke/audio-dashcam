@@ -22,8 +22,8 @@ const readBuf = 64
 // reader can be a whole RetryDelay behind that. The backlog is then handed over
 // in the first read or two, so those pulses share a handful of arrival times,
 // and the near-zero intervals between them drag the rolling median far above
-// the real tempo. Measured on hardware: three seconds after a replug the
-// dashcam reported 223.3 BPM against a true 120.
+// the real tempo. Measured on hardware: three seconds after a replug
+// Hindsight reported 223.3 BPM against a true 120.
 //
 // scripts/midi-probe.py drains for exactly this reason, and its comments
 // record the same failure in an ad-hoc reader that over-reported by 10 BPM.
@@ -38,7 +38,7 @@ const defaultDrainWindow = 150 * time.Millisecond
 // It mirrors Capture.supervise's shape deliberately -- detect, back off,
 // rediscover, reopen -- because the failure it handles is the same one: the
 // interface being unplugged. What it does not share is any path back into the
-// capture thread. Every error here is logged and dropped. The dashcam's job is
+// capture thread. Every error here is logged and dropped. Hindsight's job is
 // audio; a MIDI failure produces a take with no BPM and nothing else.
 type Reader struct {
 	// CardsPath and SndDir default to the real ALSA locations and are fields so

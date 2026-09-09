@@ -1,6 +1,6 @@
-// Package config holds the runtime configuration for the audio dashcam,
-// sourced entirely from environment variables so the buffer length and
-// channel routing can change without a rebuild.
+// Package config holds the runtime configuration for Hindsight, sourced
+// entirely from environment variables so the buffer length and channel
+// routing can change without a rebuild.
 package config
 
 import (

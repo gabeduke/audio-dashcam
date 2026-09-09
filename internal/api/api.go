@@ -1,4 +1,4 @@
-// Package api exposes the dashcam over HTTP.
+// Package api exposes Hindsight over HTTP.
 package api
 
 import (

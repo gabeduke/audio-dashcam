@@ -3,7 +3,8 @@
 set -euo pipefail
 
 # Host/user live in an untracked file so this repo carries no personal config.
-# Create deploy.local.env with e.g.  DASHCAM_HOST=pi@dashcam.local
+# Create deploy.local.env with e.g.  HINDSIGHT_HOST=pi@hindsight.local
+# The older DASHCAM_* spellings still work; see the fallbacks below.
 [ -f "$(dirname "$0")/deploy.local.env" ] && . "$(dirname "$0")/deploy.local.env"
 
 # host resolution — keep an existing deploy.local.env working
@@ -11,7 +12,7 @@ HOST="${HINDSIGHT_HOST:-${DASHCAM_HOST:-}}"
 HOST="${HOST:?set HINDSIGHT_HOST (e.g. pi@hindsight.local), or put it in deploy.local.env}"
 DEST="${HINDSIGHT_DEST:-${DASHCAM_DEST:-hindsight}}"
 
-# agent bypass — same rename
+# ssh agent bypass
 #
 # Set HINDSIGHT_NO_AGENT=1 in deploy.local.env on a machine where an ssh agent
 # holds the key hostage.
