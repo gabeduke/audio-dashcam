@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+# Two close merges each build a full arm64 cgo binary, and both deserve a
+# release, so queue them rather than cancelling either.
+#
+# Queueing only orders the runs. It does not make the changelog push safe:
+# actions/checkout checks out github.sha, not master's tip, so a run whose
+# master has moved on cannot fast-forward master from where it is standing.
+# That is handled in "Update the changelog", which re-applies the entry to the
+# real tip and warns rather than fails if the push still loses -- the tag and
+# the GitHub release are pushed before it runs, and cannot be lost by it.
+concurrency:
+  group: release-master
+  cancel-in-progress: false
+
+jobs:
+  test:
+    # Reused rather than duplicated, so a red master cannot publish.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    # Raspberry Pi OS Bookworm ships glibc 2.36; Ubuntu 24.04 links 2.39. A
+    # binary built on the bare runner will not start on the Pi, so build
+    # against the target distribution instead.
+    container: debian:bookworm
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y build-essential pkg-config portaudio19-dev git curl ca-certificates
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The checkout is owned by a different uid inside the container, which
+      # makes git refuse to read it.
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Choose the version
+        id: version
+        run: |
+          date="$(date -u +%Y.%m.%d)"
+          tag="$(git tag -l | ./scripts/next-tag.sh "$date")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "building $tag"
+
+      - name: Build
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p dist/bin
+          go build -trimpath -ldflags "-s -w -X main.version=$TAG" \
+            -o dist/bin/hindsight ./cmd/hindsight
+          ls -lh dist/bin/hindsight
+          ./dist/bin/hindsight --version
+
+      - name: Assemble the archive
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          name="hindsight_${TAG}_linux_arm64"
+          mkdir -p "dist/$name/bin" "dist/$name/web" "dist/$name/deploy"
+          cp dist/bin/hindsight              "dist/$name/bin/"
+          cp -R web/static                   "dist/$name/web/static"
+          cp deploy/hindsight.service        "dist/$name/deploy/"
+          cp deploy/hindsight.env.example    "dist/$name/deploy/"
+          cp deploy/install.sh               "dist/$name/install.sh"
+          chmod 755 "dist/$name/install.sh"
+          cp README.md CHANGELOG.md LICENSE  "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          cd dist && sha256sum "$name.tar.gz" > SHA256SUMS && cat SHA256SUMS
+
+      # Must run before the tag is created: `prev` has to be the *previous*
+      # release, and `git tag -l` would otherwise hand back the tag this run is
+      # about to create, leaving an empty range and empty notes.
+      - name: Generate the release notes
+        id: notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          DATE: ${{ steps.version.outputs.date }}
+        run: |
+          prev="$(git tag -l 'v*' --sort=-creatordate | head -1)"
+          range="${prev:+$prev..}HEAD"
+          git log --no-merges --pretty='- %s (%h)' "$range" \
+            | ./scripts/changelog-entry.sh "$TAG" "$DATE" > /tmp/entry.md
+          cat /tmp/entry.md
+
+      # The tag is the release, so it is pushed first and by itself: nothing
+      # about the changelog can cost one.
+      #
+      # It names GITHUB_SHA explicitly -- the commit the tarball above was
+      # built from -- so `git checkout <tag> && go build` reproduces the
+      # release. It used to be created on the changelog commit, one commit
+      # *ahead* of the build, so it never did.
+      - name: Tag the release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      # Best effort, deliberately.
+      #
+      # The checkout is at github.sha. With merges A then B, run A pushing
+      # HEAD:master from its own checkout is rejected: master is at B, which is
+      # not a descendant of A's changelog commit. So apply the entry to
+      # whatever master is *now* rather than to the commit this run was checked
+      # out at. (dist/ is untracked, so the tarball survives the switch, and
+      # `commit -am` cannot pick it up.)
+      #
+      # If even that loses -- a third merge landing inside this step's own
+      # window -- warn and move on. $TAG is already pushed and Publish still
+      # runs; the cost is one missing CHANGELOG.md entry, and since ranges are
+      # tag-to-tag the next release's notes cover those commits anyway.
+      - name: Update the changelog
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin master
+          git checkout -B changelog-tmp FETCH_HEAD
+
+          # Insert after the marker so the file's header survives.
+          awk '
+            { print }
+            /^<!-- new releases are inserted directly below this line -->$/ && !done {
+              print ""
+              while ((getline line < "/tmp/entry.md") > 0) print line
+              done = 1
+            }
+          ' CHANGELOG.md > /tmp/CHANGELOG.md
+          mv /tmp/CHANGELOG.md CHANGELOG.md
+
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md insertion marker not found; $TAG is released, changelog not updated"
+            exit 0
+          fi
+
+          # [skip ci] keeps this commit out of this workflow: the `test` job's
+          # `if` reads head_commit.message, and `release` needs test.
+          git commit -am "Record $TAG in the changelog [skip ci]"
+          git push origin HEAD:master \
+            || echo "::warning::changelog push failed; $TAG is released, CHANGELOG.md not updated"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          body_path: /tmp/entry.md
+          files: |
+            dist/hindsight_${{ steps.version.outputs.tag }}_linux_arm64.tar.gz
+            dist/SHA256SUMS

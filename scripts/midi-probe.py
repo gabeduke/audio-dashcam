@@ -6,7 +6,7 @@ MIDI. Before any of it can be designed against, three questions need real
 answers, because two of them can invalidate the feature outright:
 
   1. Does a MIDI port appear at all under the new firmware?
-  2. Does clock flow when the sequencer is STOPPED? The dashcam exists to catch
+  2. Does clock flow when the sequencer is STOPPED? Hindsight exists to catch
      unplanned playing. If clock only runs while the sequencer runs, then tempo
      is absent in exactly the case the product is for, and bar-based capture
      lengths have nothing to resolve against.
@@ -17,16 +17,16 @@ answers, because two of them can invalidate the feature outright:
 
 Run it ON THE PI, with the EP-136 plugged in. It walks three phases and prints
 a verdict for each question. Nothing is written and nothing is changed; the
-dashcam service can keep running, because MIDI is a separate USB interface from
-the audio endpoint it holds open.
+hindsight service can keep running, because MIDI is a separate USB interface
+from the audio endpoint it holds open.
 
 Usage:
-    ssh "$DASHCAM_HOST"
-    python3 ~/audio-dashcam/scripts/midi-probe.py
+    ssh "$HINDSIGHT_HOST"
+    python3 ~/hindsight/scripts/midi-probe.py
 
     # or, without deploying, straight from a checkout on your laptop:
-    ssh "$DASHCAM_HOST" 'cat > /tmp/midi-probe.py' < scripts/midi-probe.py
-    ssh -t "$DASHCAM_HOST" 'python3 /tmp/midi-probe.py'
+    ssh "$HINDSIGHT_HOST" 'cat > /tmp/midi-probe.py' < scripts/midi-probe.py
+    ssh -t "$HINDSIGHT_HOST" 'python3 /tmp/midi-probe.py'
 
 Options:
     --match EP-136   substring matched against the amidi port list
@@ -449,13 +449,13 @@ def verdict(idle, running, freeplay):
     if idle_c or free_c:
         print(f"   YES -- {idle_c} pulses at rest, {free_c} while playing freely.")
         print("   Tempo is available even when you are just jamming, so bar-based")
-        print("   capture and tempo metadata work for the case the dashcam is for.")
+        print("   capture and tempo metadata work for the case Hindsight is for.")
     else:
         run_c = running.counts[CLOCK]
         if run_c:
             print(f"   NO -- {run_c} pulses only while the sequencer ran; zero otherwise.")
             print("   This is the bad outcome. Tempo would be absent for unplanned")
-            print("   playing, which is most of what the dashcam catches. Bar-based")
+            print("   playing, which is most of what Hindsight catches. Bar-based")
             print("   capture lengths would have nothing to resolve against, and")
             print("   tempo metadata would be blank on the takes you care about.")
         else:

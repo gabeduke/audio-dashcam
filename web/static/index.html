@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hindsight</title>
+<meta name="description" content="Always-listening audio buffer. Grab the last 30 seconds of the jam.">
+
+<meta name="theme-color" content="#0b1120">
+<meta name="color-scheme" content="dark">
+
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+
+<!-- Android needs TLS for a full install. That comes from `tailscale serve`
+     on the tailnet hostname; the plain-HTTP LAN address still works but will
+     not install, and app.js will not register the service worker there
+     because isSecureContext is false. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Hindsight">
+
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="/icons/icon-192.png" alt="">
+    <b>Hindsight</b>
+  </div>
+  <div class="health">
+    <!-- Shown only while a screen wake lock is actually held. Icon-only on
+         purpose: .health has caused a topbar overflow before, and a phone that
+         is charging will show this at 390px. -->
+    <span class="awake" id="awake" hidden
+          title="Screen kept awake while charging"
+          aria-label="Screen kept awake while charging" role="img">&#9788;</span>
+    <span class="dot" id="health-dot"></span>
+    <span id="health-text">connecting</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- The ribbon is a direct child of main, not of a column: at the
+       two-column breakpoints it spans both (grid-column: 1 / -1), which is the
+       only way the compressed old end gets enough pixels to be readable.
+       Its contents are built by lib/ribbon.js. -->
+  <div class="viz-wrap" id="viz-wrap"></div>
+
+  <div class="col col-monitor">
+
+    <section class="panel">
+
+      <div class="meters" id="meters"></div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="k">buffered</div>
+          <div class="v" id="stat-buffered">–</div>
+        </div>
+        <div class="stat">
+          <div class="k">disk free</div>
+          <div class="v" id="stat-disk">–</div>
+        </div>
+        <div class="stat">
+          <div class="k">dropped</div>
+          <div class="v" id="stat-xruns">0</div>
+        </div>
+        <div class="stat">
+          <div class="k">tempo</div>
+          <div class="v" id="stat-tempo">–</div>
+        </div>
+      </div>
+
+      <details class="chan" id="chan-diag">
+        <summary>Input channels</summary>
+        <div class="grid" id="chan-grid"></div>
+        <p class="hint">
+          Saving channels <b id="chan-saving">–</b> from <b id="chan-device">–</b>.
+          Change with <code>SAVE_CHANNELS</code>.
+        </p>
+      </details>
+    </section>
+
+    <section class="panel">
+      <h2>Capture</h2>
+      <div class="seg" id="dur-seg" role="group" aria-label="Capture length"></div>
+      <button class="capture-btn" id="capture-btn">Capture</button>
+      <p class="last">last saved <span id="last-saved">none</span></p>
+    </section>
+
+  </div>
+
+  <div class="col col-library">
+
+    <section class="panel">
+      <h2>Takes</h2>
+      <div class="takes" id="takes"></div>
+      <p class="empty" id="takes-empty">No takes yet — hit Capture.</p>
+    </section>
+
+  </div>
+
+</main>
+
+<div id="toasts" aria-live="polite"></div>
+
+<dialog class="sheet" id="confirm">
+  <form method="dialog" class="sheet-inner">
+    <h3>Delete this take?</h3>
+    <p id="confirm-name"></p>
+    <div class="sheet-actions">
+      <button class="icon-btn" value="cancel">Cancel</button>
+      <button class="icon-btn confirm" value="delete">Delete</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

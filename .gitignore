@@ -10,8 +10,9 @@ __pycache__/
 *.pyc
 
 # Go build output
-v2-go/v2-go-bin
-v2-go/vendor/
+/bin/
+/vendor/
+/dist/
 
 # Runtime state
 .use_green
@@ -21,6 +22,10 @@ v2-go/vendor/
 .playwright-mcp/
 *.png.tmp
 /mobile-*.png
+# scripts/screenshots.mjs needs playwright installed at the repo root to
+# resolve; nothing else uses node.
+/node_modules/
+/package-lock.json
 
 # Local deploy target (host/user) — never committed
 deploy.local.env
@@ -33,3 +38,6 @@ design/buffer-ribbon.html
 
 # Harness-managed worktrees
 .claude/worktrees/
+
+# SDD controller workspace — ledger, briefs, review packages
+/.superpowers/
