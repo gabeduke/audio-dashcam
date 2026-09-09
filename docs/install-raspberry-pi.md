@@ -166,9 +166,15 @@ The log is noisy on start-up: ALSA and JACK both print probe failures that mean
 nothing here. Filter them out.
 
 ```bash
-journalctl --user -u hindsight.service -f \
+journalctl _SYSTEMD_USER_UNIT=hindsight.service -f \
   | grep -viE "ALSA lib|jack server|JackShm|Cannot connect to server"
 ```
+
+`_SYSTEMD_USER_UNIT=` rather than the more obvious `--user -u`: unless journald
+is configured to keep a persistent user journal — it is not, by default, on
+Raspberry Pi OS — a user service's output goes to the *system* journal, and
+`journalctl --user -u hindsight.service` answers `No journal files were found`
+even while the service is running and logging.
 
 What you want to see:
 

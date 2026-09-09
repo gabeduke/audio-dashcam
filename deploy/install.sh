@@ -147,7 +147,12 @@ done
 if [ -z "$body" ]; then
   echo
   echo "service did not come up. The log:" >&2
-  journalctl --user -u hindsight.service -n 30 --no-pager >&2
+  # _SYSTEMD_USER_UNIT=, not `--user -u`. Where journald keeps no persistent
+  # user journal -- the default on Raspberry Pi OS -- user-unit output lands in
+  # the system journal and `journalctl --user` reports "No journal files were
+  # found", printing nothing at the exact moment this diagnostic matters.
+  # Verified on Debian 13 (trixie) on a Pi 5, 2026-09-09.
+  journalctl _SYSTEMD_USER_UNIT=hindsight.service -n 30 --no-pager >&2
   exit 1
 fi
 
