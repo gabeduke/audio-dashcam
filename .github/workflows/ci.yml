@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    # master is covered by release.yml, which calls this workflow. Without
+    # this, every merge would run the suite twice.
+    branches-ignore: [master]
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # audio/capture.go is cgo against PortAudio, so the headers are needed
+      # to compile the tests -- not to run them. No audio hardware is touched.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y portaudio19-dev
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      - name: Release script tests
+        run: ./scripts/test-release-scripts.sh
+
+      # The demo path is what lets anyone run this without hardware. If it
+      # breaks, nothing else in this workflow would notice.
+      - name: Demo boots without cgo
+        run: |
+          CGO_ENABLED=0 go build -o /tmp/hindsight ./cmd/hindsight
+          RING_SECONDS=30 OUTPUT_DIR=/tmp/takes /tmp/hindsight --demo &
+          pid=$!
+          trap 'kill $pid' EXIT
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:5000/api/status >/tmp/status.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/status.json
+          test -s /tmp/status.json

@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    # Reused rather than duplicated, so a red master cannot publish.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    # Raspberry Pi OS Bookworm ships glibc 2.36; Ubuntu 24.04 links 2.39. A
+    # binary built on the bare runner will not start on the Pi, so build
+    # against the target distribution instead.
+    container: debian:bookworm
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y build-essential portaudio19-dev git curl ca-certificates jq
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The checkout is owned by a different uid inside the container, which
+      # makes git refuse to read it.
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Choose the version
+        id: version
+        run: |
+          date="$(date -u +%Y.%m.%d)"
+          tag="$(git tag -l | ./scripts/next-tag.sh "$date")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "building $tag"
+
+      - name: Build
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p dist/bin
+          go build -trimpath -ldflags "-s -w -X main.version=$TAG" \
+            -o dist/bin/hindsight ./cmd/hindsight
+          ls -lh dist/bin/hindsight
+          ./dist/bin/hindsight --version
+
+      - name: Assemble the archive
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          name="hindsight_${TAG}_linux_arm64"
+          mkdir -p "dist/$name/bin" "dist/$name/web" "dist/$name/deploy"
+          cp dist/bin/hindsight              "dist/$name/bin/"
+          cp -R web/static                   "dist/$name/web/static"
+          cp deploy/hindsight.service        "dist/$name/deploy/"
+          cp deploy/hindsight.env.example    "dist/$name/deploy/"
+          cp deploy/install.sh               "dist/$name/install.sh"
+          chmod 755 "dist/$name/install.sh"
+          cp README.md CHANGELOG.md LICENSE  "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          cd dist && sha256sum "$name.tar.gz" > SHA256SUMS && cat SHA256SUMS
+
+      - name: Update the changelog
+        id: notes
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          DATE: ${{ steps.version.outputs.date }}
+        run: |
+          prev="$(git tag -l 'v*' --sort=-creatordate | head -1)"
+          range="${prev:+$prev..}HEAD"
+          git log --no-merges --pretty='- %s (%h)' "$range" \
+            | ./scripts/changelog-entry.sh "$TAG" "$DATE" > /tmp/entry.md
+          cat /tmp/entry.md
+
+          # Insert after the marker so the file's header survives.
+          awk '
+            { print }
+            /^<!-- new releases are inserted directly below this line -->$/ && !done {
+              print ""
+              while ((getline line < "/tmp/entry.md") > 0) print line
+              done = 1
+            }
+          ' CHANGELOG.md > /tmp/CHANGELOG.md
+          mv /tmp/CHANGELOG.md CHANGELOG.md
+
+      - name: Tag and push the changelog
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "Record $TAG in the changelog [skip ci]"
+          git tag "$TAG"
+          git push origin HEAD:master
+          git push origin "$TAG"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          body_path: /tmp/entry.md
+          files: |
+            dist/hindsight_${{ steps.version.outputs.tag }}_linux_arm64.tar.gz
+            dist/SHA256SUMS
