@@ -43,7 +43,7 @@ func main() {
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		log.Fatalf("output dir: %v", err)
 	}
-	log.Printf("[*] audio-dashcam v2 — %s", cfg)
+	log.Printf("[*] hindsight %s — %s", version, cfg)
 
 	// FixedClock and Reader each satisfy both consumers, so both are held
 	// through their interfaces rather than asserted back out of one.

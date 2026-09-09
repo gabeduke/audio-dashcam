@@ -23,6 +23,7 @@ if [ "$(uname -m)" != "aarch64" ]; then
   die "the release binary is arm64; this machine is $(uname -m). Build from source instead: go build -o bin/hindsight ./cmd/hindsight"
 fi
 command -v systemctl >/dev/null || die "systemd is required"
+command -v curl >/dev/null || die "curl is required (used to verify hindsight started)"
 systemctl --user show-environment >/dev/null 2>&1 \
   || die "no systemd user session. Log in over SSH as the user that will run this, not via sudo."
 [ -x "$SRC/bin/hindsight" ] || die "no bin/hindsight next to this script; run it from inside the unpacked release"
@@ -40,6 +41,7 @@ sudo apt-get install -y libportaudio2 libasound2 ffmpeg \
   || die "apt-get install failed; install libportaudio2 libasound2 ffmpeg manually and re-run"
 
 # --- migrate an existing audio-dashcam install ------------------------------
+OLD_ROOT="$HOME/audio-dashcam"
 if systemctl --user list-unit-files 2>/dev/null | grep -q '^audio-dashcam\.service'; then
   say "found an existing audio-dashcam.service"
   # `|| reply=n` so a closed/non-interactive stdin (EOF) degrades to "no"
@@ -47,19 +49,27 @@ if systemctl --user list-unit-files 2>/dev/null | grep -q '^audio-dashcam\.servi
   read -r -p "    stop and disable it, and copy its takes across? [y/N] " reply || reply=n
   if [ "${reply:-n}" = "y" ] || [ "${reply:-n}" = "Y" ]; then
     systemctl --user disable --now audio-dashcam.service || true
-    if [ -d "$HOME/audio-dashcam/jam_saves" ]; then
+    if [ -d "$OLD_ROOT/jam_saves" ]; then
       mkdir -p "$ROOT/jam_saves"
-      # A copy, not a move, and into an existing directory's contents (the
-      # trailing "/." on the source) rather than the directory itself -- a
-      # plain `mv src dest` with `dest` already existing would nest the takes
-      # one level too deep, where ListTakes' non-recursive os.ReadDir can't
-      # see them. `-a` preserves mtimes (ListTakes sorts by them); `-n` never
-      # clobbers a file that already landed from a previous run; leaving the
-      # originals in place means an interrupted cross-filesystem copy still
-      # leaves the user with one intact set of takes.
-      cp -an "$HOME/audio-dashcam/jam_saves/." "$ROOT/jam_saves/" \
-        || die "could not copy takes; your originals are untouched in $HOME/audio-dashcam/jam_saves"
-      say "copied takes to $ROOT/jam_saves — originals left in $HOME/audio-dashcam/jam_saves, delete them once you are happy"
+      # Not `cp -n`: coreutils 9.2 made it exit nonzero (with a diagnostic)
+      # when it skips an existing destination instead of silently succeeding,
+      # and its replacement, `--update=none`, only exists from 9.3 -- so
+      # there's no single flag that means "merge, don't clobber" across both
+      # Raspberry Pi OS Bookworm (9.1) and Trixie (9.5+). Per-file is
+      # explicit, portable across both, and -- unlike a directory-level
+      # `mv`/`cp` into an already-existing $ROOT/jam_saves -- cannot nest.
+      copied=0 kept=0
+      while IFS= read -r -d '' f; do
+        if [ -e "$ROOT/jam_saves/$(basename "$f")" ]; then
+          kept=$((kept + 1))
+        elif cp -a "$f" "$ROOT/jam_saves/"; then
+          # -a preserves mtime: ListTakes derives each take's Created from it.
+          copied=$((copied + 1))
+        else
+          die "could not copy $(basename "$f"); your originals are untouched in $OLD_ROOT/jam_saves"
+        fi
+      done < <(find "$OLD_ROOT/jam_saves" -maxdepth 1 -type f -print0)
+      say "copied $copied take file(s), $kept already present — originals left in $OLD_ROOT/jam_saves, delete them once you are happy"
     fi
   elif systemctl --user is-active --quiet audio-dashcam.service; then
     die "audio-dashcam.service is still running and holds the USB audio interface; hindsight would fail to open it and crash-loop fighting it. Stop it first: systemctl --user disable --now audio-dashcam.service (or re-run this installer and accept the migration prompt)"
@@ -106,21 +116,39 @@ sudo loginctl enable-linger "$(id -un)" \
   || say "warning: could not enable lingering — the service will stop at logout. Run: sudo loginctl enable-linger $(id -un)"
 
 say "waiting for it to come up"
-sleep 3
-if curl -fsS http://127.0.0.1:5000/api/status >/dev/null 2>&1; then
-  say "running: http://$(hostname).local:5000"
-  say "next: set SAVE_CHANNELS in $ROOT/hindsight.env — the default assumes an EP-136"
-elif journalctl --user -u hindsight.service -n 20 --no-pager 2>/dev/null | grep -q 'capture:'; then
-  # main.go's only fatal error from opening the audio device is logged as
-  # "capture: <err>". Restart=always means it's already retrying on its own;
-  # this isn't the installer failing, it's a Pi with nothing plugged in yet.
-  echo
-  say "installed, but it can't open an audio interface yet — probably nothing is plugged in."
-  say "hindsight will keep retrying on its own (Restart=always); plug the interface in and it should come up within a few seconds."
-  say "check with: systemctl --user status hindsight.service"
-else
+# Poll for ~15s instead of one shot after a fixed sleep: Type=simple means
+# systemd considers the unit started the instant the process forks, well
+# before it's actually listening, and a slow Pi needs more than 3s for that.
+body=""
+tries=0
+until body="$(curl -fsS http://127.0.0.1:5000/api/status 2>/dev/null)"; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 8 ]; then
+    body=""
+    break
+  fi
+  sleep 2
+done
+
+if [ -z "$body" ]; then
   echo
   echo "service did not come up. The log:" >&2
   journalctl --user -u hindsight.service -n 30 --no-pager >&2
   exit 1
+fi
+
+# capture_healthy/last_error are internal/api/api.go statusResponse fields
+# (json tags "capture_healthy" / "last_error"); Go's encoder writes them with
+# no space after the colon, so this literal match is exact today. If that
+# field is ever renamed this simply stops matching and falls into the "not
+# confirmed recording" branch below -- a false "nothing is recording" rather
+# than a false "success", which is the safer direction to be wrong in.
+if printf '%s' "$body" | grep -q '"capture_healthy":true'; then
+  say "running: http://$(hostname).local:5000"
+  say "next: set SAVE_CHANNELS in $ROOT/hindsight.env — the default assumes an EP-136"
+else
+  last_error="$(printf '%s' "$body" | grep -o '"last_error":"[^"]*"' | sed -e 's/^"last_error":"//' -e 's/"$//')"
+  say "running: http://$(hostname).local:5000 — but not recording"
+  say "capture error: ${last_error:-(none reported)}"
+  say "hindsight will keep retrying on its own; plug the interface in (or fix the error above) — check with: systemctl --user status hindsight.service"
 fi
