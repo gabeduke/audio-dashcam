@@ -153,17 +153,26 @@ Request: `?buckets=400&spans=30,120,420,900`
   "ring_seconds": 900,
   "buffered_seconds": 412.3,
   "edge_seconds": 1,
-  "buckets": [0, 0, 12, 47, 201, ...],
+  "buckets": "AAAMLskA...",
   "signal_seconds": [0, 0, 112.4, 112.4]
 }
 ```
 
-- `buckets` runs **oldest → newest**, 0..255, peak per bucket, log-spaced by the
-  formula above. The client asks for roughly one bucket per CSS pixel,
-  `min(600, round(width))`; ~1.6 KB of JSON at 400. Buckets covering ages
-  the buffer has not reached yet return **0**, and the client derives the hatch
-  boundary from `buffered_seconds` rather than from the byte values — a zero
-  byte means silence and must not be overloaded to also mean "no data".
+- `buckets` runs **oldest → newest**, one byte each, 0..255, peak per bucket,
+  log-spaced by the formula above. The client asks for roughly one bucket per
+  CSS pixel, `min(600, round(width))`.
+- **It is base64, not a JSON array of numbers.** 400 buckets is 536 characters
+  against ~1600, it is the encoding `scripts/take-envelope.py` already writes,
+  it is what the mockup's client already decodes, and Go marshals `[]byte` this
+  way with no conversion code. Smaller on a link already flagged as slow, and
+  less code on both sides.
+- **The newest bucket reaches age 0**, rather than stopping at `A`. Otherwise
+  the freshest second lands in no bucket at all and never reaches the right
+  edge; this is what keeps the 1–2 s figure above conservative.
+- Buckets covering ages the buffer has not reached yet return **0**, and the
+  client derives the hatch boundary from `buffered_seconds` rather than from the
+  byte values — a zero byte means silence and must not be overloaded to also
+  mean "no data".
 - `signal_seconds` is parallel to `spans`, counting bins at or above **byte
   60** — the −46 dBFS gate, which quantises to −45.9 — times the bin width. One linear scan over bytes already held.
 - **`spans` comes from the client** so tier policy stays in `buildDurations()`;
@@ -242,10 +251,14 @@ axis stays pinned to `ring_seconds` so the markers do not dance as the buffer
 fills.
 
 **Stale.** `.viz-wrap.stale::after` — today's red `no signal` scrim — must be
-preserved; the EP is unplugged often enough that losing it is a regression. It
-will need **`z-index: 2`**: it is currently the only positioned thing in the
-wrap, and the ribbon's absolutely-positioned children would otherwise paint over
-it.
+preserved; the EP is unplugged often enough that losing it is a regression.
+
+Generated `::after` content is already the **last box** among an element's
+children, so DOM order alone keeps the scrim above the ribbon's layers and no
+change is strictly required. It still gets an explicit **`z-index: 2`** as
+insurance: a future ribbon layer taking a `z-index` of its own would otherwise
+silently drop the scrim behind it, and the failure mode — a dead-looking ribbon
+with no explanation — is exactly the one this scrim exists to prevent.
 
 **Ages are captured-audio time, not wall clock.** When capture stalls, the audio
 ring and the envelope stall together, so what the ribbon shows is always what
