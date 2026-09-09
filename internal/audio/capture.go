@@ -1,15 +1,12 @@
 package audio
 
 import (
-	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gabeduke/hindsight/internal/config"
-	"github.com/gordonklaus/portaudio"
 )
 
 // blockPoolSize bounds how much audio can be in flight between the PortAudio
@@ -28,10 +25,10 @@ const levelBinMillis = 10
 // Capture owns the audio device, the ring buffer and the level meters.
 type Capture struct {
 	cfg    *config.Config
+	src    Source
 	ring   *Ring
 	levels *Levels
 	env    *Envelope
-	pa     *paLifecycle
 
 	free   chan []int32
 	filled chan []int32
@@ -42,20 +39,17 @@ type Capture struct {
 	deviceName   atomic.Value // string
 	lastErr      atomic.Value // string
 
-	mu     sync.Mutex
-	stream *portaudio.Stream
-
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
-func NewCapture(cfg *config.Config) *Capture {
+func NewCapture(cfg *config.Config, src Source) *Capture {
 	c := &Capture{
 		cfg:    cfg,
+		src:    src,
 		ring:   NewRing(cfg.RingFrames(), cfg.Channels),
 		levels: NewLevels(cfg.Channels, cfg.SampleRate, levelBinMillis),
-		pa:     newPALifecycle(portaudio.Initialize, portaudio.Terminate),
 		free:   make(chan []int32, blockPoolSize),
 		filled: make(chan []int32, blockPoolSize),
 		stop:   make(chan struct{}),
@@ -100,10 +94,6 @@ func (c *Capture) BufferedSeconds() float64 {
 // Start brings up the ring writer, the level broadcaster and the supervised
 // audio stream. It returns immediately; use Healthy to observe state.
 func (c *Capture) Start() error {
-	if err := c.pa.Init(); err != nil {
-		return err
-	}
-
 	c.wg.Add(3)
 	go c.ringWriter()
 	go c.broadcaster()
@@ -153,12 +143,14 @@ func (c *Capture) supervise() {
 	for {
 		select {
 		case <-c.stop:
-			c.closeStream()
+			c.src.Close()
+			c.healthy.Store(false)
 			return
 		default:
 		}
 
-		if err := c.openStream(); err != nil {
+		name, err := c.src.Open(c.processAudio)
+		if err != nil {
 			c.lastErr.Store(err.Error())
 			c.healthy.Store(false)
 			log.Printf("[!] capture: %v (retry in %s)", err, backoff)
@@ -170,18 +162,16 @@ func (c *Capture) supervise() {
 			if backoff < 15*time.Second {
 				backoff *= 2
 			}
-			// PortAudio's device list is frozen at Pa_Initialize, so an
-			// interface that was power-cycled is invisible until it is rebuilt.
-			// Safe here because the open failed: openStream never leaves a
-			// stream live on any of its error paths.
-			if err := c.pa.Rescan(); err != nil {
-				log.Printf("[!] portaudio rescan: %v", err)
+			if err := c.src.Reset(); err != nil {
+				log.Printf("[!] device rescan: %v", err)
 			}
 			continue
 		}
 
 		backoff = time.Second
 		c.lastErr.Store("")
+		c.deviceName.Store(name)
+		c.lastCallback.Store(time.Now().UnixNano())
 		c.healthy.Store(true)
 		log.Printf("[*] capture live on %q — ring %ds, %d ch @ %d Hz",
 			c.DeviceName(), c.cfg.RingSeconds, c.cfg.Channels, c.cfg.SampleRate)
@@ -192,7 +182,8 @@ func (c *Capture) supervise() {
 			select {
 			case <-c.stop:
 				tick.Stop()
-				c.closeStream()
+				c.src.Close()
+				c.healthy.Store(false)
 				return
 			case <-tick.C:
 				last := c.lastCallback.Load()
@@ -205,106 +196,8 @@ func (c *Capture) supervise() {
 			}
 		}
 		tick.Stop()
-		c.closeStream()
-	}
-}
-
-func (c *Capture) openStream() error {
-	dev, err := c.pickDevice()
-	if err != nil {
-		return err
-	}
-
-	p := portaudio.HighLatencyParameters(dev, nil)
-	p.Input.Channels = c.cfg.Channels
-	p.SampleRate = float64(c.cfg.SampleRate)
-	p.FramesPerBuffer = c.cfg.FramesPerBuf
-	// An explicit, generous latency is the fix for the busy-poll that pegged a
-	// core: LowLatencyParameters asks a USB device for a deadline it cannot
-	// meet, so PortAudio spins. A ring buffer has no latency requirement.
-	p.Input.Latency = time.Duration(c.cfg.InputLatencyMS) * time.Millisecond
-
-	stream, err := portaudio.OpenStream(p, c.processAudio)
-	if err != nil {
-		return fmt.Errorf("open %q: %w", dev.Name, err)
-	}
-	if err := stream.Start(); err != nil {
-		stream.Close()
-		return fmt.Errorf("start %q: %w", dev.Name, err)
-	}
-
-	c.mu.Lock()
-	c.stream = stream
-	c.mu.Unlock()
-
-	c.deviceName.Store(dev.Name)
-	c.lastCallback.Store(time.Now().UnixNano())
-	return nil
-}
-
-func (c *Capture) closeStream() {
-	c.mu.Lock()
-	s := c.stream
-	c.stream = nil
-	c.mu.Unlock()
-
-	if s != nil {
-		_ = s.Stop()
-		_ = s.Close()
-	}
-	c.healthy.Store(false)
-}
-
-// pickDevice selects the input deterministically. ALSA exposes the same card
-// under several PortAudio names (hw, plughw, default, sysdefault, front,
-// dsnoop); the plug-based ones can silently add format conversion, so prefer a
-// direct one. The old code kept the *last* match, which was arbitrary.
-func (c *Capture) pickDevice() (*portaudio.DeviceInfo, error) {
-	devices, err := portaudio.Devices()
-	if err != nil {
-		return nil, fmt.Errorf("enumerate devices: %w", err)
-	}
-
-	var match, fallback *portaudio.DeviceInfo
-	bestScore := -1
-
-	for _, d := range devices {
-		if d.MaxInputChannels < c.cfg.Channels {
-			continue
-		}
-		if fallback == nil {
-			fallback = d
-		}
-		if c.cfg.DeviceMatch == "" || !strings.Contains(d.Name, c.cfg.DeviceMatch) {
-			continue
-		}
-		if s := deviceScore(d.Name); s > bestScore {
-			bestScore, match = s, d
-		}
-	}
-
-	if match != nil {
-		return match, nil
-	}
-	if fallback != nil {
-		log.Printf("[!] no input matching %q with >=%d channels; falling back to %q",
-			c.cfg.DeviceMatch, c.cfg.Channels, fallback.Name)
-		return fallback, nil
-	}
-	return nil, fmt.Errorf("no input device with >=%d channels (is it in use by another process?)", c.cfg.Channels)
-}
-
-func deviceScore(name string) int {
-	n := strings.ToLower(name)
-	switch {
-	case strings.Contains(n, "dsnoop"), strings.Contains(n, "plughw"):
-		return 0
-	case strings.Contains(n, "sysdefault"), strings.Contains(n, "default"):
-		return 1
-	case strings.Contains(n, "front"):
-		return 2
-	default:
-		return 3 // bare "EP-136: USB Audio (hw:2,0)" style
+		c.src.Close()
+		c.healthy.Store(false)
 	}
 }
 
@@ -341,7 +234,7 @@ func (c *Capture) Stop() {
 	c.stopOnce.Do(func() {
 		close(c.stop)
 		c.wg.Wait()
-		c.closeStream()
-		_ = c.pa.Term()
+		c.src.Close()
+		_ = c.src.Shutdown()
 	})
 }

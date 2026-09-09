@@ -30,7 +30,7 @@ func main() {
 	}
 	log.Printf("[*] audio-dashcam v2 — %s", cfg)
 
-	cap := audio.NewCapture(cfg)
+	cap := audio.NewCapture(cfg, audio.NewDeviceSource(cfg))
 	if err := cap.Start(); err != nil {
 		log.Fatalf("capture: %v", err)
 	}
