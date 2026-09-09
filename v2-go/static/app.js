@@ -20,6 +20,7 @@ const el = {
   statBuffered: $('stat-buffered'),
   statDisk: $('stat-disk'),
   statXruns: $('stat-xruns'),
+  statTempo: $('stat-tempo'),
   durSeg: $('dur-seg'),
   captureBtn: $('capture-btn'),
   lastSaved: $('last-saved'),
@@ -160,11 +161,21 @@ function applyStatus(s) {
   el.statBuffered.className = s.buffered_seconds < 5 ? 'v warn' : 'v';
 
   const free = s.disk_free_gb;
-  el.statDisk.textContent = `${free.toFixed(1)} GB`;
+  // No decimal past 100 GB: the tile is 78px at 390px wide and "128.4 GB"
+  // clips there, while a tenth of a gigabyte means nothing on a "do I have
+  // room" readout. Only reachable on a bigger card than this Pi has.
+  el.statDisk.textContent = `${free >= 100 ? free.toFixed(0) : free.toFixed(1)} GB`;
   el.statDisk.className = free < s.min_free_gb ? 'v bad' : free < s.min_free_gb * 3 ? 'v warn' : 'v';
 
   el.statXruns.textContent = String(s.xruns);
   el.statXruns.className = s.xruns > 0 ? 'v warn' : 'v';
+
+  // A dash means "no defensible reading", which covers three real states: the
+  // EP unplugged, the EP present with clock-send switched off (it ships off,
+  // and that looks exactly like firmware that cannot send clock), and a room
+  // that has been quiet too briefly to fill two quarter notes.
+  el.statTempo.textContent = s.midi_bpm == null ? '\u2013' : s.midi_bpm.toFixed(1);
+  el.statTempo.className = s.midi_connected ? 'v' : 'v warn';
 
   el.lastSaved.textContent = s.last_saved || 'none';
 

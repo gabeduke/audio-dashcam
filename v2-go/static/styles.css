@@ -236,18 +236,31 @@ main {
 .stats {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Four tiles at 390px is about 80px each, and .stat .v is 14px tabular mono
+     with an ellipsis, so "129.9" fits with room to spare. Verified across
+     viewports rather than assumed. */
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
 .stat {
   background: var(--panel-2);
   border-radius: 9px;
-  padding: 8px 10px;
+  /* 8px, not 10px. At four tiles on a 390px phone the content box is 62px and
+     "DISK FREE" needs 61.4px -- at 10px padding it was 1.8px short, wrapped to
+     two lines, and added 14px to every tile in the row. That pushed Capture
+     from 385px to 399px in a 390px-tall landscape viewport: below the fold,
+     which is the one invariant this layout exists to protect. */
+  padding: 8px 8px;
   min-width: 0;
 }
 .stat .k {
   font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
   text-transform: uppercase; color: var(--ink-faint);
+  /* Structural, not cosmetic: a key that wraps doubles its tile's height and
+     takes the whole stats row with it. A slightly clipped label is a far
+     better failure than Capture disappearing below the fold, so the wrap is
+     made impossible rather than merely unlikely. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .stat .v {
   font-family: var(--mono); font-size: 14px; color: var(--ink);
