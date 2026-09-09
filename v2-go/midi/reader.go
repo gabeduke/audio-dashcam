@@ -15,6 +15,23 @@ import (
 // syscall rather than 64.
 const readBuf = 64
 
+// defaultDrainWindow is how long after opening the device its bytes are thrown
+// away instead of timestamped.
+//
+// ALSA starts buffering clock the moment the device node appears, and this
+// reader can be a whole RetryDelay behind that. The backlog is then handed over
+// in the first read or two, so those pulses share a handful of arrival times,
+// and the near-zero intervals between them drag the rolling median far above
+// the real tempo. Measured on hardware: three seconds after a replug the
+// dashcam reported 223.3 BPM against a true 120.
+//
+// scripts/midi-probe.py drains for exactly this reason, and its comments
+// record the same failure in an ad-hoc reader that over-reported by 10 BPM.
+//
+// 150ms is generous: a full 4KB rawmidi buffer is handed over in microseconds,
+// while the cost is six real pulses at 120 BPM, out of a 900-second ring.
+const defaultDrainWindow = 150 * time.Millisecond
+
 // Reader owns the rawmidi device: discovery, opening, reading, timestamping,
 // and recovery when the interface disappears.
 //
@@ -32,6 +49,9 @@ type Reader struct {
 	// default is deliberately unhurried: a missing EP is the normal state, not
 	// an outage to race back from.
 	RetryDelay time.Duration
+	// DrainWindow is how long after opening the device its bytes are discarded
+	// as backlog rather than timestamped. See readLoop.
+	DrainWindow time.Duration
 
 	match string
 	clock *Clock
@@ -53,12 +73,13 @@ type Reader struct {
 
 func NewReader(match string, clock *Clock) *Reader {
 	r := &Reader{
-		CardsPath:  DefaultCardsPath,
-		SndDir:     DefaultSndDir,
-		RetryDelay: 4 * time.Second,
-		match:      match,
-		clock:      clock,
-		stop:       make(chan struct{}),
+		CardsPath:   DefaultCardsPath,
+		SndDir:      DefaultSndDir,
+		RetryDelay:  4 * time.Second,
+		DrainWindow: defaultDrainWindow,
+		match:       match,
+		clock:       clock,
+		stop:        make(chan struct{}),
 	}
 	r.device.Store("")
 	return r
@@ -154,9 +175,27 @@ func (r *Reader) readLoop(f *os.File) {
 	buf := make([]byte, readBuf)
 	var sawTransport bool
 
+	opened := time.Now()
+	drainUntil := opened.Add(r.DrainWindow)
+	dropped := 0
+	draining := r.DrainWindow > 0
+
 	for {
 		n, err := f.Read(buf)
 		now := time.Now()
+
+		if draining {
+			if now.Before(drainUntil) {
+				dropped += n
+				n = 0
+			} else {
+				draining = false
+				if dropped > 0 {
+					log.Printf("[*] midi: dropped %d backlog bytes buffered before the reader opened", dropped)
+				}
+			}
+		}
+
 		for _, b := range buf[:n] {
 			r.clock.Feed(now, b)
 		}

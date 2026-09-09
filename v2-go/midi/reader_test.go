@@ -49,6 +49,9 @@ func TestReaderFeedsPulsesFromTheDevice(t *testing.T) {
 
 	r := NewReader("EP-136", clock)
 	r.CardsPath, r.SndDir = cards, snd
+	// Short, and stepped past below: writing the instant the reader connects is
+	// exactly what the drain window is there to discard.
+	r.DrainWindow = 20 * time.Millisecond
 	r.Start()
 	defer r.Stop()
 
@@ -60,6 +63,7 @@ func TestReaderFeedsPulsesFromTheDevice(t *testing.T) {
 	defer w.Close()
 
 	waitFor(t, "the reader to connect", r.Connected)
+	time.Sleep(60 * time.Millisecond) // past the drain window
 
 	// Written one at a time so each is timestamped as it lands -- the same
 	// shape a rawmidi device delivers.
@@ -79,6 +83,7 @@ func TestReaderTimestampsFinelyEnoughToEstimateTempo(t *testing.T) {
 
 	r := NewReader("EP-136", clock)
 	r.CardsPath, r.SndDir = cards, snd
+	r.DrainWindow = 20 * time.Millisecond
 	r.Start()
 	defer r.Stop()
 
@@ -88,6 +93,7 @@ func TestReaderTimestampsFinelyEnoughToEstimateTempo(t *testing.T) {
 	}
 	defer w.Close()
 	waitFor(t, "the reader to connect", r.Connected)
+	time.Sleep(60 * time.Millisecond) // past the drain window
 
 	// 5ms apart is 500 BPM's worth of pulses, far faster than the EP, and it
 	// keeps the test under a second. The point is only that the reader's
@@ -118,6 +124,7 @@ func TestReaderIgnoresNonRealtimeTraffic(t *testing.T) {
 
 	r := NewReader("EP-136", clock)
 	r.CardsPath, r.SndDir = cards, snd
+	r.DrainWindow = 20 * time.Millisecond
 	r.Start()
 	defer r.Stop()
 
@@ -127,6 +134,7 @@ func TestReaderIgnoresNonRealtimeTraffic(t *testing.T) {
 	}
 	defer w.Close()
 	waitFor(t, "the reader to connect", r.Connected)
+	time.Sleep(60 * time.Millisecond) // past the drain window
 
 	// A note-on with a clock byte landing between its status and data bytes.
 	w.Write([]byte{0x90, ClockByte, 0x3C, 0x7F, 0xF0, 0x7E, 0x00, 0xF7})
@@ -192,4 +200,89 @@ func TestReaderStopIsIdempotent(t *testing.T) {
 	r.Start()
 	r.Stop()
 	r.Stop() // must not panic on a second close
+}
+
+// Backlog on open must not be counted.
+//
+// ALSA buffers incoming clock from the moment the device node appears, and the
+// reader can be up to RetryDelay behind that. Everything that piled up is then
+// delivered in the first read or two, so those pulses share a handful of
+// timestamps, and the near-zero intervals between them drag the rolling median
+// far above the real tempo.
+//
+// Seen on hardware: three seconds after a replug the dashcam reported 223.3
+// BPM against a true 120. scripts/midi-probe.py drains for exactly this reason.
+func TestReaderDropsTheBacklogItFindsOnOpen(t *testing.T) {
+	cards, snd, fifo := fifoFixture(t)
+	clock := NewClock(10000)
+
+	r := NewReader("EP-136", clock)
+	r.CardsPath, r.SndDir = cards, snd
+	r.DrainWindow = 300 * time.Millisecond
+	r.Start()
+	defer r.Stop()
+
+	w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open write end: %v", err)
+	}
+	defer w.Close()
+	waitFor(t, "the reader to connect", r.Connected)
+
+	// A backlog: 200 pulses in one write, so they all share an arrival time.
+	burst := make([]byte, 200)
+	for i := range burst {
+		burst[i] = ClockByte
+	}
+	if _, err := w.Write(burst); err != nil {
+		t.Fatalf("write burst: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond) // past the drain window
+	if n := clock.Pulses(); n != 0 {
+		t.Errorf("Pulses = %d after a backlog burst, want 0 (it must be dropped)", n)
+	}
+
+	// Live pulses after the window are counted normally.
+	start := time.Now()
+	for i := 0; i < 120; i++ {
+		w.Write([]byte{ClockByte})
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitFor(t, "live pulses", func() bool { return clock.Pulses() >= 120 })
+
+	got, ok := clock.BPM(start.Add(-time.Second), time.Now())
+	if !ok {
+		t.Fatal("BPM refused after the drain window")
+	}
+	// 5ms spacing is 500 BPM. With the burst counted this reads far higher.
+	if math.Abs(got-500) > 150 {
+		t.Errorf("BPM = %.1f, want roughly 500; the backlog is still being counted", got)
+	}
+}
+
+// The drain must not swallow a device that is simply quiet at first.
+func TestReaderCountsPulsesArrivingAfterTheDrainWindow(t *testing.T) {
+	cards, snd, fifo := fifoFixture(t)
+	clock := NewClock(10000)
+
+	r := NewReader("EP-136", clock)
+	r.CardsPath, r.SndDir = cards, snd
+	r.DrainWindow = 50 * time.Millisecond
+	r.Start()
+	defer r.Stop()
+
+	w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open write end: %v", err)
+	}
+	defer w.Close()
+	waitFor(t, "the reader to connect", r.Connected)
+
+	time.Sleep(120 * time.Millisecond)
+	for i := 0; i < 60; i++ {
+		w.Write([]byte{ClockByte})
+		time.Sleep(2 * time.Millisecond)
+	}
+	waitFor(t, "60 pulses", func() bool { return clock.Pulses() >= 60 })
 }
