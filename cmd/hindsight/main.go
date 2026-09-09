@@ -75,19 +75,39 @@ func main() {
 	_ = srv.Shutdown(ctx)
 }
 
-// staticDir resolves the UI directory next to the binary so the service works
-// regardless of the working directory systemd hands it.
+// staticDir resolves the UI directory. It is a thin wrapper so that the
+// decision itself stays pure and testable.
 func staticDir() string {
-	if v := os.Getenv("STATIC_DIR"); v != "" {
-		return v
+	exe, _ := os.Executable()
+	cwd, _ := os.Getwd()
+	home, _ := os.UserHomeDir()
+	return resolveStaticDir(os.Getenv("STATIC_DIR"), exe, cwd, home, dirExists)
+}
+
+// resolveStaticDir picks the UI directory from the layouts this ships in.
+//
+// Executable-relative candidates come first so an installed binary is never
+// confused by whatever directory systemd happened to start it in. The
+// working directory is consulted only afterwards, which is what makes
+// `go run ./cmd/hindsight` work from a checkout -- there the binary lives in
+// a temporary build directory with no UI anywhere near it.
+func resolveStaticDir(envDir, exePath, cwd, home string, exists func(string) bool) string {
+	if envDir != "" {
+		return envDir
 	}
-	if exe, err := os.Executable(); err == nil {
-		if d := filepath.Join(filepath.Dir(exe), "static"); dirExists(d) {
-			return d
+	dir := filepath.Dir(exePath)
+	candidates := []string{
+		filepath.Join(dir, "..", "web", "static"), // release / deploy.sh
+		filepath.Join(dir, "static"),              // flat
+		filepath.Join(dir, "..", "static"),        // flat, one level down
+		filepath.Join(cwd, "web", "static"),       // go run from a checkout
+	}
+	for _, c := range candidates {
+		if exists(c) {
+			return filepath.Clean(c)
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "audio-dashcam", "v2-go", "static")
+	return filepath.Join(home, "hindsight", "web", "static")
 }
 
 func dirExists(p string) bool {
