@@ -240,36 +240,45 @@ func (e *Envelope) Buckets(n int) []byte {
 	return out
 }
 
-// atLocked reads the bin n places back from the write head; n=0 is the newest.
-// Anything past what is buffered reads as 0.
-func (e *Envelope) atLocked(n int) byte {
-	if n < 0 || n >= e.bufferedLocked() {
-		return 0
-	}
-	n2 := len(e.buf)
-	return e.buf[((e.writePos-1-n)%n2+n2)%n2]
-}
-
 // SignalSeconds reports how much of the newest span carries signal, counting
 // bins at or above signalByte, clamped to what is actually buffered.
 //
 // The client cannot compute this from Buckets: a bucket at the old end spans
 // tens of seconds and its peak says only that something in there was loud.
+//
+// Like Buckets, the lock is held only long enough to memcpy the bins in
+// question into a scratch copy; the counting loop runs on that copy so a slow
+// HTTP poll can never stall PushBin on the PortAudio callback thread. Unlike
+// Buckets, only the newest `bins` bytes are copied rather than the whole
+// ring: a poll asking about a 30s tier has no reason to touch the other 870s.
 func (e *Envelope) SignalSeconds(span float64) float64 {
 	if span <= 0 {
 		return 0
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	// bins is an upper bound at this point -- clamped to what is buffered
+	// once the lock is held below. Sized and allocated before the lock so the
+	// allocation itself never runs while PushBin might be waiting on e.mu.
 	bins := int(math.Round(span / e.binSeconds))
+	scratch := make([]byte, bins)
+
+	e.mu.Lock()
 	if avail := e.bufferedLocked(); bins > avail {
 		bins = avail
 	}
+	if bins > 0 {
+		n2 := len(e.buf)
+		start := ((e.writePos-bins)%n2 + n2) % n2
+		c := copy(scratch[:bins], e.buf[start:])
+		if c < bins {
+			copy(scratch[c:bins], e.buf[:bins-c])
+		}
+	}
+	e.mu.Unlock()
+
 	n := 0
-	for k := 0; k < bins; k++ {
-		if e.atLocked(k) >= signalByte {
+	for _, v := range scratch[:bins] {
+		if v >= signalByte {
 			n++
 		}
 	}

@@ -291,6 +291,39 @@ func TestSignalSecondsOfANonPositiveSpanIsZero(t *testing.T) {
 	}
 }
 
+// TestSignalSecondsHandlesAWrappedRing pins the two-segment copy in
+// SignalSeconds against a ring that has actually wrapped -- none of the tests
+// above do, since they either stay under capacity or fill it exactly once.
+//
+// Capacity is 10 bins; 15 are pushed, so writePos sits at 5 and the physical
+// buffer holds (by push order i, physical slot i%10): slot0..4 = i10..14,
+// slot5..8 = i5..8, slot9 = i9. Querying the newest 6 bins (span 0.06s) asks
+// for logical i9..i14, whose oldest byte is start=(5-6) mod 10=9: a single
+// byte at the far physical end (slot9, holding i9), then the wrap to
+// slot0..4 (i10..14).
+//
+// Both segments mix loud and quiet (i9 loud; i10..14 quiet/loud/quiet/loud/
+// loud) rather than being uniform, so a byte-slice zero value cannot stand in
+// for a dropped segment by coincidence: dropping either the 1-byte tail
+// segment or the 5-byte wrapped segment, or misplacing the split point,
+// changes the count away from the correct 4.
+func TestSignalSecondsHandlesAWrappedRing(t *testing.T) {
+	e := NewEnvelope(10, []int{0}, 10) // 10 bins x 10ms = 0.1s capacity
+	loud := map[int]bool{9: true, 11: true, 13: true, 14: true}
+	for i := 0; i < 15; i++ {
+		if loud[i] {
+			e.PushBin(binAt(0.5))
+		} else {
+			e.PushBin(binAt(0.002))
+		}
+	}
+	// Window i9..i14 = loud,quiet,loud,quiet,loud,loud -> 4 loud of 6.
+
+	if got := e.SignalSeconds(0.06); got < 0.0399 || got > 0.0401 {
+		t.Fatalf("wrapped-ring window reports %vs of signal, want ~0.04 (4 loud bins of 6)", got)
+	}
+}
+
 func TestBucketsNewestBucketNeverCollapsesAtHighBucketCounts(t *testing.T) {
 	e := NewEnvelope(90000, []int{0}, 10) // 900s
 	for i := 0; i < 90000; i++ {
