@@ -233,6 +233,64 @@ func TestEnvelopeSurvivesConcurrentPushAndRead(t *testing.T) {
 // budget hit zero around bucket 4268 -- 700+ buckets, including the newest
 // one, before the loop finished -- and every one of them silently reported 0
 // instead of real audio. Each boundary must be computed independently.
+func TestSignalSecondsCountsOnlyTheNewestSpan(t *testing.T) {
+	e := NewEnvelope(1000, []int{0}, 10) // 10s capacity
+	for i := 0; i < 500; i++ {           // older half: loud
+		e.PushBin(binAt(0.5))
+	}
+	for i := 0; i < 500; i++ { // newer half: silent
+		e.PushBin(binAt(0))
+	}
+
+	if got := e.SignalSeconds(2); got != 0 {
+		t.Fatalf("newest 2s reports %vs of signal, want 0 -- it is silent", got)
+	}
+	if got := e.SignalSeconds(10); got < 4.9 || got > 5.1 {
+		t.Fatalf("whole ring reports %vs of signal, want ~5", got)
+	}
+}
+
+func TestSignalSecondsThresholdIsByte60(t *testing.T) {
+	// byte 60 is -45.9 dBFS: amplitude 10^(-45.88/20) = 0.005082.
+	// Just under it must not count; just over it must.
+	quiet := NewEnvelope(100, []int{0}, 10)
+	for i := 0; i < 100; i++ {
+		quiet.PushBin(binAt(0.0049))
+	}
+	if got := quiet.SignalSeconds(1); got != 0 {
+		t.Fatalf("below the gate counted %vs, want 0", got)
+	}
+
+	loud := NewEnvelope(100, []int{0}, 10)
+	for i := 0; i < 100; i++ {
+		loud.PushBin(binAt(0.0053))
+	}
+	if got := loud.SignalSeconds(1); got < 0.99 || got > 1.01 {
+		t.Fatalf("above the gate counted %vs, want ~1", got)
+	}
+}
+
+func TestSignalSecondsClampsToWhatIsBuffered(t *testing.T) {
+	e := NewEnvelope(1000, []int{0}, 10) // 10s capacity
+	for i := 0; i < 200; i++ {           // only 2s written, all loud
+		e.PushBin(binAt(0.5))
+	}
+	// Asking for 10s must not invent 8s of signal from unwritten bins.
+	if got := e.SignalSeconds(10); got < 1.9 || got > 2.1 {
+		t.Fatalf("got %vs of signal from a 2s buffer, want ~2", got)
+	}
+}
+
+func TestSignalSecondsOfANonPositiveSpanIsZero(t *testing.T) {
+	e := NewEnvelope(100, []int{0}, 10)
+	for i := 0; i < 100; i++ {
+		e.PushBin(binAt(0.5))
+	}
+	if got := e.SignalSeconds(0); got != 0 {
+		t.Fatalf("SignalSeconds(0) = %v, want 0", got)
+	}
+}
+
 func TestBucketsNewestBucketNeverCollapsesAtHighBucketCounts(t *testing.T) {
 	e := NewEnvelope(90000, []int{0}, 10) // 900s
 	for i := 0; i < 90000; i++ {

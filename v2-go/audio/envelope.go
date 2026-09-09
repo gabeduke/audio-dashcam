@@ -239,3 +239,39 @@ func (e *Envelope) Buckets(n int) []byte {
 	}
 	return out
 }
+
+// atLocked reads the bin n places back from the write head; n=0 is the newest.
+// Anything past what is buffered reads as 0.
+func (e *Envelope) atLocked(n int) byte {
+	if n < 0 || n >= e.bufferedLocked() {
+		return 0
+	}
+	n2 := len(e.buf)
+	return e.buf[((e.writePos-1-n)%n2+n2)%n2]
+}
+
+// SignalSeconds reports how much of the newest span carries signal, counting
+// bins at or above signalByte, clamped to what is actually buffered.
+//
+// The client cannot compute this from Buckets: a bucket at the old end spans
+// tens of seconds and its peak says only that something in there was loud.
+func (e *Envelope) SignalSeconds(span float64) float64 {
+	if span <= 0 {
+		return 0
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	bins := int(math.Round(span / e.binSeconds))
+	if avail := e.bufferedLocked(); bins > avail {
+		bins = avail
+	}
+	n := 0
+	for k := 0; k < bins; k++ {
+		if e.atLocked(k) >= signalByte {
+			n++
+		}
+	}
+	return float64(n) * e.binSeconds
+}
