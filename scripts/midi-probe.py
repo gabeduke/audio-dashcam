@@ -22,7 +22,7 @@ the audio endpoint it holds open.
 
 Usage:
     ssh "$DASHCAM_HOST"
-    python3 ~/audio-dashcam/scripts/midi-probe.py
+    python3 ~/hindsight/scripts/midi-probe.py
 
     # or, without deploying, straight from a checkout on your laptop:
     ssh "$DASHCAM_HOST" 'cat > /tmp/midi-probe.py' < scripts/midi-probe.py

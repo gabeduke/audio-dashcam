@@ -22,6 +22,10 @@ __pycache__/
 .playwright-mcp/
 *.png.tmp
 /mobile-*.png
+# scripts/screenshots.mjs needs playwright installed at the repo root to
+# resolve; nothing else uses node.
+/node_modules/
+/package-lock.json
 
 # Local deploy target (host/user) — never committed
 deploy.local.env

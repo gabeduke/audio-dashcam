@@ -1,8 +1,10 @@
 // Capture the README screenshots against a running demo instance.
 //
+//   npm install --no-save playwright@1.49.0   # at the repo root, so this
+//   npx playwright install chromium          # file's import resolves
+//
 //   RING_SECONDS=120 OUTPUT_DIR=/tmp/hindsight-shots PORT=15173 \
 //     go run ./cmd/hindsight --demo &
-//   npx --yes playwright@1.49.0 install chromium
 //   HINDSIGHT_URL=http://127.0.0.1:15173 node scripts/screenshots.mjs
 //
 // Everything is localhost on purpose: this repo is public, and a screenshot

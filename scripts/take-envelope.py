@@ -21,7 +21,7 @@ is "was something happening here", and a peak survives downsampling where a
 mean washes out.
 
 Usage:
-    python3 scripts/take-envelope.py ~/audio-dashcam/jam_saves/jam_*.wav
+    python3 scripts/take-envelope.py ~/hindsight/jam_saves/jam_*.wav
     python3 scripts/take-envelope.py TAKE.wav --bin-ms 20 --out /tmp/env.b64
 """
 
