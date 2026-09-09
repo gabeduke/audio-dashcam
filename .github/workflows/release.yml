@@ -7,9 +7,15 @@ on:
 permissions:
   contents: write
 
-# Two close merges would each build a full arm64 cgo binary and race to push;
-# the loser's push would fail and show as a red run for no real reason. Queue
-# them instead of cancelling either -- both merges still deserve a release.
+# Two close merges each build a full arm64 cgo binary, and both deserve a
+# release, so queue them rather than cancelling either.
+#
+# Queueing only orders the runs. It does not make the changelog push safe:
+# actions/checkout checks out github.sha, not master's tip, so a run whose
+# master has moved on cannot fast-forward master from where it is standing.
+# That is handled in "Update the changelog", which re-applies the entry to the
+# real tip and warns rather than fails if the push still loses -- the tag and
+# the GitHub release are pushed before it runs, and cannot be lost by it.
 concurrency:
   group: release-master
   cancel-in-progress: false
@@ -81,7 +87,10 @@ jobs:
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           cd dist && sha256sum "$name.tar.gz" > SHA256SUMS && cat SHA256SUMS
 
-      - name: Update the changelog
+      # Must run before the tag is created: `prev` has to be the *previous*
+      # release, and `git tag -l` would otherwise hand back the tag this run is
+      # about to create, leaving an empty range and empty notes.
+      - name: Generate the release notes
         id: notes
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -92,6 +101,43 @@ jobs:
           git log --no-merges --pretty='- %s (%h)' "$range" \
             | ./scripts/changelog-entry.sh "$TAG" "$DATE" > /tmp/entry.md
           cat /tmp/entry.md
+
+      # The tag is the release, so it is pushed first and by itself: nothing
+      # about the changelog can cost one.
+      #
+      # It names GITHUB_SHA explicitly -- the commit the tarball above was
+      # built from -- so `git checkout <tag> && go build` reproduces the
+      # release. It used to be created on the changelog commit, one commit
+      # *ahead* of the build, so it never did.
+      - name: Tag the release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      # Best effort, deliberately.
+      #
+      # The checkout is at github.sha. With merges A then B, run A pushing
+      # HEAD:master from its own checkout is rejected: master is at B, which is
+      # not a descendant of A's changelog commit. So apply the entry to
+      # whatever master is *now* rather than to the commit this run was checked
+      # out at. (dist/ is untracked, so the tarball survives the switch, and
+      # `commit -am` cannot pick it up.)
+      #
+      # If even that loses -- a third merge landing inside this step's own
+      # window -- warn and move on. $TAG is already pushed and Publish still
+      # runs; the cost is one missing CHANGELOG.md entry, and since ranges are
+      # tag-to-tag the next release's notes cover those commits anyway.
+      - name: Update the changelog
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin master
+          git checkout -B changelog-tmp FETCH_HEAD
 
           # Insert after the marker so the file's header survives.
           awk '
@@ -104,21 +150,16 @@ jobs:
           ' CHANGELOG.md > /tmp/CHANGELOG.md
           mv /tmp/CHANGELOG.md CHANGELOG.md
 
-      - name: Tag and push the changelog
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "Record $TAG in the changelog [skip ci]"
-          git tag "$TAG"
-          # Atomic: a transient failure on just the tag push would otherwise
-          # leave master carrying a changelog entry for a release with no tag
-          # and no GitHub release, and since that commit carries [skip ci],
-          # nothing re-triggers -- and a re-run's checkout is by then behind
-          # master, so it can't push the same commit again either.
-          git push --atomic origin HEAD:master "refs/tags/$TAG"
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md insertion marker not found; $TAG is released, changelog not updated"
+            exit 0
+          fi
+
+          # [skip ci] keeps this commit out of this workflow: the `test` job's
+          # `if` reads head_commit.message, and `release` needs test.
+          git commit -am "Record $TAG in the changelog [skip ci]"
+          git push origin HEAD:master \
+            || echo "::warning::changelog push failed; $TAG is released, CHANGELOG.md not updated"
 
       - name: Publish
         uses: softprops/action-gh-release@v2
