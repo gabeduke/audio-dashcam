@@ -7,14 +7,21 @@ import (
 	"testing"
 )
 
-// realCards is `cat /proc/asound/cards` from the Pi on 2026-09-09 with the
-// interface unplugged, with an EP-136 entry added in the same shape.
+// realCards is the verbatim `cat /proc/asound/cards` from the Pi on
+// 2026-09-09 with the EP-136 connected.
+//
+// The bracketed id is "EP136" -- no hyphen. DEVICE_MATCH is "EP-136", which
+// appears only in the short name and the long name, so a discovery that
+// matched the bracketed id would find nothing. That is not a hypothetical:
+// this is the real device this project is built around, and this is its real
+// entry. An earlier version of this fixture guessed "Sidekick" here; the
+// hardware turned out to differ in the details and agree on the principle.
 const realCards = ` 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0
                       vc4-hdmi-0
  1 [vc4hdmi1       ]: vc4-hdmi - vc4-hdmi-1
                       vc4-hdmi-1
- 2 [Sidekick       ]: USB-Audio - EP-136 K.O. Sidekick
-                      Teenage Engineering EP-136 K.O. Sidekick at usb-xhci-hcd.1-1, high speed
+ 2 [EP136          ]: USB-Audio - EP-136
+                      teenage engineering EP-136 at usb-xhci-hcd.0-1, high speed
 `
 
 const cardsNoEP = ` 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0
@@ -61,7 +68,7 @@ func TestFindMatchesTheLongNameNotTheBracketedID(t *testing.T) {
 func TestFindMatchesTheBracketedIDToo(t *testing.T) {
 	cards, snd := fixture(t, realCards, "midiC2D0")
 
-	got, err := Find(cards, snd, "Sidekick")
+	got, err := Find(cards, snd, "EP136")
 	if err != nil {
 		t.Fatalf("Find: %v", err)
 	}

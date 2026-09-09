@@ -2785,6 +2785,32 @@ during execution" section is the pattern.
 
 ## Corrections found during execution
 
+**ALSA rawmidi is exclusive-open, so Task 11 step 4 as written is
+impossible.** With the service running, a second reader of
+`/dev/snd/midiC2D0` gets `EBUSY` — so `scripts/midi-probe.py` cannot be run
+alongside the dashcam to compare readings "over the same period", and neither
+can anything else. The cross-check has to stop the service, measure, and
+restart; that is valid here only because the EP's idle clock is stable to
+0.0001 BPM across the gap, which was checked rather than assumed. This also
+invalidates the probe instructions in `STATE.md`.
+
+**The real card id is `EP136`, with no hyphen.** `DEVICE_MATCH` is `EP-136`,
+which appears only in the short and long names, so matching the bracketed id
+would have found nothing. The plan reasoned its way to searching the whole
+entry from a *guessed* fixture that said `Sidekick`; the hardware turned out to
+differ in the details and to make the point more sharply. The fixture is now
+the verbatim file from the Pi.
+
+**`overall` and the rolling median disagree by 4.2 BPM on idle hardware.**
+Measured independently: 1049 clocks in 24.99s gives `overall` 104.84 BPM and a
+rolling median of 100.67, against the dashcam's 100.665. The mean inter-pulse
+interval sits below the median one, so pulses arrive in occasional micro-bursts
+even through a clean `os.read`+`select` reader. `scripts/midi-probe.py` labels
+`overall` "trust this one" — true of *that* script, whose Python buffering
+distorts its median, but false in general. On a reader that timestamps at
+arrival the median is the better statistic, which is what the spec chose and
+what shipped.
+
 **Task 7 named one `api.New` call site in the tests; there are four.**
 `newTestAPI` at `api_test.go:26` is the one the plan spotted, but
 `handleEnvelope`'s helper at :244 and another at :369 construct the API
