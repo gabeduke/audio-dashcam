@@ -31,6 +31,10 @@ type Config struct {
 
 	// Server
 	Port string
+
+	// Version is stamped by the build (-ldflags -X main.version) and reported
+	// on /api/status, so an installed Pi can say which release it is running.
+	Version string
 }
 
 func Load() (*Config, error) {
@@ -48,6 +52,7 @@ func Load() (*Config, error) {
 		MinFreeGB:       envFloat("MIN_FREE_GB", 1.0),
 		MaxSaves:        envInt("MAX_SAVES", 0),
 		Port:            env("PORT", "5000"),
+		Version:         "dev",
 	}
 
 	// SAVE_CHANNELS is 1-indexed in the environment because that is how the

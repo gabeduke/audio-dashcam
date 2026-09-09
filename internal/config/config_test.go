@@ -67,3 +67,15 @@ func TestLoadRejectsAChannelOutsideTheDevice(t *testing.T) {
 		t.Fatal("Load() succeeded with SAVE_CHANNELS beyond CHANNELS; want an error")
 	}
 }
+
+func TestLoadDefaultVersionIsDev(t *testing.T) {
+	clearEnv(t)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if c.Version != "dev" {
+		t.Errorf("Version = %q, want %q", c.Version, "dev")
+	}
+}

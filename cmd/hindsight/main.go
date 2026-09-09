@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -18,19 +20,47 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// version is stamped at build time with -ldflags "-X main.version=v2026.09.09.1".
+var version = "dev"
+
 func main() {
 	log.SetFlags(log.Ltime)
+
+	demo := flag.Bool("demo", false, "run with a synthetic audio source and no hardware")
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	cfg.Version = version
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		log.Fatalf("output dir: %v", err)
 	}
 	log.Printf("[*] audio-dashcam v2 — %s", cfg)
 
-	cap := audio.NewCapture(cfg, audio.NewDeviceSource(cfg))
+	// FixedClock and Reader each satisfy both consumers, so both are held
+	// through their interfaces rather than asserted back out of one.
+	var (
+		src   audio.Source
+		clock api.MIDISource
+		tempo audio.TempoSource
+	)
+	if *demo {
+		fc := midi.NewFixedClock(audio.DemoBPM)
+		src, clock, tempo = audio.NewDemoSource(cfg), fc, fc
+		log.Printf("[*] demo mode — synthetic audio, no hardware")
+	} else {
+		src = audio.NewDeviceSource(cfg)
+	}
+
+	cap := audio.NewCapture(cfg, src)
 	if err := cap.Start(); err != nil {
 		log.Fatalf("capture: %v", err)
 	}
@@ -38,17 +68,20 @@ func main() {
 
 	saver := audio.NewSaver(cap)
 
-	// The clock ring covers the same window as the audio ring, so a full-ring
-	// save can still ask about its oldest end. Sized in pulses at the fastest
-	// tempo the BPM field accepts.
-	clock := midi.NewClock(midi.CapacityFor(cfg.RingSeconds))
-	reader := midi.NewReader(cfg.DeviceMatch, clock)
-	reader.Start()
-	defer reader.Stop()
-	saver.SetTempoSource(reader)
+	if !*demo {
+		// The clock ring covers the same window as the audio ring, so a
+		// full-ring save can still ask about its oldest end. Sized in pulses
+		// at the fastest tempo the BPM field accepts.
+		mc := midi.NewClock(midi.CapacityFor(cfg.RingSeconds))
+		reader := midi.NewReader(cfg.DeviceMatch, mc)
+		reader.Start()
+		defer reader.Stop()
+		clock, tempo = reader, reader
+	}
+	saver.SetTempoSource(tempo)
 
 	r := mux.NewRouter()
-	api.New(cfg, cap, saver, cap.Envelope(), reader).SetupRoutes(r)
+	api.New(cfg, cap, saver, cap.Envelope(), clock).SetupRoutes(r)
 	r.PathPrefix("/").Handler(noCacheShell(http.FileServer(http.Dir(staticDir()))))
 
 	srv := &http.Server{

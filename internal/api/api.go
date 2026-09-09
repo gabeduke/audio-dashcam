@@ -88,6 +88,7 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 }
 
 type statusResponse struct {
+	Version         string    `json:"version"`
 	IsRecording     bool      `json:"is_recording"`
 	CaptureHealthy  bool      `json:"capture_healthy"`
 	LastError       string    `json:"last_error"`
@@ -120,6 +121,7 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, statusResponse{
+		Version:         a.cfg.Version,
 		IsRecording:     a.cap.Healthy(),
 		CaptureHealthy:  a.cap.Healthy(),
 		LastError:       a.cap.LastError(),
