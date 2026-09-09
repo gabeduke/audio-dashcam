@@ -43,7 +43,7 @@ func Load() (*Config, error) {
 		FramesPerBuf:    envInt("FRAMES_PER_BUFFER", 2048),
 		InputLatencyMS:  envInt("INPUT_LATENCY_MS", 100),
 		RingSeconds:     envInt("RING_SECONDS", 900),
-		OutputDir:       env("OUTPUT_DIR", filepath.Join(home, "audio-dashcam", "jam_saves")),
+		OutputDir:       env("OUTPUT_DIR", filepath.Join(home, "hindsight", "jam_saves")),
 		SaveAllChannels: envBool("SAVE_ALL_CHANNELS", false),
 		MinFreeGB:       envFloat("MIN_FREE_GB", 1.0),
 		MaxSaves:        envInt("MAX_SAVES", 0),
@@ -51,9 +51,18 @@ func Load() (*Config, error) {
 	}
 
 	// SAVE_CHANNELS is 1-indexed in the environment because that is how the
-	// hardware labels them; store zero-based. Default 3,4 was measured from a
-	// real capture: channels 1/2 carry only bleed, 5-8 are digital silence.
-	ch, err := parseChannels(env("SAVE_CHANNELS", "3,4"), c.Channels)
+	// hardware labels them; store zero-based.
+	//
+	// The EP-136 presents its eight inputs as four stereo record pairs and
+	// Teenage Engineering does not document which USB pair is which, so it was
+	// measured (2026-09-08) by playing into mixer channel 1 and comparing
+	// levels with the fader up and down: USB 1/2 moved 20.8 dB, USB 3/4 did
+	// not move at all. 1/2 is the post-fader MAIN; 3/4 is a pre-fader tap on
+	// one strip, which records at that strip's limiter ceiling with the mixer
+	// -- and everything plugged into the other inputs -- missing.
+	//
+	// scripts/channel-probe.py re-runs the measurement if this is ever in doubt.
+	ch, err := parseChannels(env("SAVE_CHANNELS", "1,2"), c.Channels)
 	if err != nil {
 		return nil, err
 	}
