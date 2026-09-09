@@ -27,10 +27,11 @@ type API struct {
 	cfg   *config.Config
 	cap   *audio.Capture
 	saver *audio.Saver
+	env   *audio.Envelope
 }
 
-func New(cfg *config.Config, cap *audio.Capture, saver *audio.Saver) *API {
-	return &API{cfg: cfg, cap: cap, saver: saver}
+func New(cfg *config.Config, cap *audio.Capture, saver *audio.Saver, env *audio.Envelope) *API {
+	return &API{cfg: cfg, cap: cap, saver: saver, env: env}
 }
 
 func (a *API) SetupRoutes(r *mux.Router) {
@@ -41,6 +42,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/take", a.handleTakePatch).Methods(http.MethodPatch)
 	r.HandleFunc("/api/download", a.handleDownload).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/peaks", a.handlePeaks).Methods(http.MethodGet, http.MethodHead)
+	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
 }
 
@@ -209,6 +211,84 @@ func (a *API) handlePeaks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, "peaks.json", statModTime(f), f)
+}
+
+// maxBuckets caps what a client can ask for. The ribbon wants about one bucket
+// per CSS pixel and the widest target is ~1246px, so this is generous.
+//
+// It is also the only upper bound on the work one request makes the envelope
+// do — Buckets clamps the low end but not the high end — so this is what stops
+// an unbounded ?buckets= from turning into an unbounded aggregation.
+const maxBuckets = 600
+
+type envelopeResponse struct {
+	RingSeconds     float64 `json:"ring_seconds"`
+	BufferedSeconds float64 `json:"buffered_seconds"`
+	EdgeSeconds     float64 `json:"edge_seconds"`
+	// Buckets is base64 rather than a JSON array: 400 buckets is 536 chars
+	// against ~1600, it is the encoding scripts/take-envelope.py already
+	// writes, and Go marshals []byte this way with no conversion.
+	Buckets       []byte    `json:"buckets"`
+	SignalSeconds []float64 `json:"signal_seconds"`
+}
+
+// handleEnvelope serves the buffer ribbon: log-spaced buckets over the whole
+// ring, plus seconds-of-signal for each capture tier the client names.
+//
+// The tiers come from the client so buildDurations() stays the only place that
+// decides what they are.
+func (a *API) handleEnvelope(w http.ResponseWriter, r *http.Request) {
+	if a.env == nil {
+		writeErr(w, http.StatusServiceUnavailable, "envelope not available")
+		return
+	}
+
+	buckets := 400
+	if v := r.URL.Query().Get("buckets"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "buckets must be an integer")
+			return
+		}
+		buckets = n
+	}
+	if buckets < 1 {
+		buckets = 1
+	}
+	if buckets > maxBuckets {
+		buckets = maxBuckets
+	}
+
+	ring := a.env.RingSeconds()
+	var spans []float64
+	if v := r.URL.Query().Get("spans"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			f, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+			if err != nil || f < 0 {
+				writeErr(w, http.StatusBadRequest, "spans must be non-negative numbers")
+				return
+			}
+			spans = append(spans, f)
+		}
+	}
+
+	// Non-nil so an empty spans list marshals as [] rather than null.
+	sig := make([]float64, len(spans))
+	for i, s := range spans {
+		if s == 0 { // 0 means the whole ring, matching /api/trigger
+			s = ring
+		}
+		sig[i] = a.env.SignalSeconds(s)
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, envelopeResponse{
+		RingSeconds:     ring,
+		BufferedSeconds: a.env.BufferedSeconds(),
+		EdgeSeconds:     audio.EdgeSeconds,
+		Buckets:         a.env.Buckets(buckets),
+		SignalSeconds:   sig,
+	})
 }
 
 // safeTakeName validates a .wav take name and rejects anything with a path in it.

@@ -38,7 +38,7 @@ func main() {
 	saver := audio.NewSaver(cap)
 
 	r := mux.NewRouter()
-	api.New(cfg, cap, saver).SetupRoutes(r)
+	api.New(cfg, cap, saver, cap.Envelope()).SetupRoutes(r)
 	r.PathPrefix("/").Handler(noCacheShell(http.FileServer(http.Dir(staticDir()))))
 
 	srv := &http.Server{

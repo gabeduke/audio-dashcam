@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ import (
 func newTestAPI(t *testing.T) (*mux.Router, string) {
 	t.Helper()
 	dir := t.TempDir()
-	a := New(&config.Config{OutputDir: dir}, nil, nil)
+	a := New(&config.Config{OutputDir: dir}, nil, nil, nil)
 	r := mux.NewRouter()
 	a.SetupRoutes(r)
 	return r, dir
@@ -228,6 +229,134 @@ func TestPatchTakeNewerSidecarIs409(t *testing.T) {
 	w := patch(t, r, "jam_a.wav", `{"starred":true}`)
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 for a sidecar from a newer version (body %s)", w.Code, w.Body.String())
+	}
+}
+
+// newEnvelopeAPI builds an API over a real envelope holding `bins` loud bins.
+// Capture and Saver stay nil: the envelope handler never touches them.
+func newEnvelopeAPI(t *testing.T, capBins, bins int) *mux.Router {
+	t.Helper()
+	e := audio.NewEnvelope(capBins, []int{0}, 10)
+	for i := 0; i < bins; i++ {
+		e.PushBin(audio.Bin{Min: []float32{-0.5}, Max: []float32{0.5}, RMS: []float32{0}})
+	}
+	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, e)
+	r := mux.NewRouter()
+	a.SetupRoutes(r)
+	return r
+}
+
+func getEnvelope(t *testing.T, r *mux.Router, query string) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/envelope"+query, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("bad JSON: %v (%s)", err, w.Body.String())
+	}
+	return body
+}
+
+func TestEnvelopeReportsRingAndBuffered(t *testing.T) {
+	r := newEnvelopeAPI(t, 90000, 3000) // 900s ring, 30s written
+	body := getEnvelope(t, r, "?buckets=64")
+
+	if got := body["ring_seconds"].(float64); got != 900 {
+		t.Errorf("ring_seconds = %v, want 900", got)
+	}
+	if got := body["buffered_seconds"].(float64); got < 29.9 || got > 30.1 {
+		t.Errorf("buffered_seconds = %v, want ~30", got)
+	}
+	if got := body["edge_seconds"].(float64); got != 1 {
+		t.Errorf("edge_seconds = %v, want 1", got)
+	}
+}
+
+func TestEnvelopeBucketsAreBase64OfTheRequestedLength(t *testing.T) {
+	r := newEnvelopeAPI(t, 90000, 90000)
+	body := getEnvelope(t, r, "?buckets=64")
+
+	raw, err := base64.StdEncoding.DecodeString(body["buckets"].(string))
+	if err != nil {
+		t.Fatalf("buckets is not base64: %v", err)
+	}
+	if len(raw) != 64 {
+		t.Fatalf("got %d buckets, want 64", len(raw))
+	}
+	if raw[len(raw)-1] == 0 {
+		t.Fatal("newest bucket is silent, but the whole ring is loud")
+	}
+}
+
+func TestEnvelopeSignalSecondsIsParallelToSpans(t *testing.T) {
+	r := newEnvelopeAPI(t, 90000, 3000) // 30s of loud audio
+	body := getEnvelope(t, r, "?buckets=16&spans=10,30")
+
+	sig := body["signal_seconds"].([]any)
+	if len(sig) != 2 {
+		t.Fatalf("got %d signal_seconds for 2 spans", len(sig))
+	}
+	if v := sig[0].(float64); v < 9.9 || v > 10.1 {
+		t.Errorf("10s span reports %v, want ~10", v)
+	}
+	if v := sig[1].(float64); v < 29.9 || v > 30.1 {
+		t.Errorf("30s span reports %v, want ~30", v)
+	}
+}
+
+func TestEnvelopeSpanZeroMeansTheWholeRing(t *testing.T) {
+	// The UI's Full button sends 0, matching /api/trigger.
+	r := newEnvelopeAPI(t, 1000, 1000) // 10s ring, fully loud
+	body := getEnvelope(t, r, "?buckets=8&spans=0")
+
+	sig := body["signal_seconds"].([]any)
+	if v := sig[0].(float64); v < 9.9 || v > 10.1 {
+		t.Fatalf("span 0 reports %v, want the whole 10s ring", v)
+	}
+}
+
+func TestEnvelopeClampsBucketCount(t *testing.T) {
+	r := newEnvelopeAPI(t, 90000, 90000)
+
+	body := getEnvelope(t, r, "?buckets=99999")
+	raw, _ := base64.StdEncoding.DecodeString(body["buckets"].(string))
+	if len(raw) != 600 {
+		t.Errorf("buckets=99999 returned %d, want the 600 cap", len(raw))
+	}
+
+	body = getEnvelope(t, r, "?buckets=0")
+	raw, _ = base64.StdEncoding.DecodeString(body["buckets"].(string))
+	if len(raw) != 1 {
+		t.Errorf("buckets=0 returned %d, want 1", len(raw))
+	}
+}
+
+func TestEnvelopeRejectsNonNumericParams(t *testing.T) {
+	r := newEnvelopeAPI(t, 1000, 1000)
+	for _, q := range []string{"?buckets=lots", "?spans=30,soon"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/envelope"+q, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
+	}
+}
+
+func TestEnvelopeWithoutAnEnvelopeIs503(t *testing.T) {
+	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, nil)
+	r := mux.NewRouter()
+	a.SetupRoutes(r)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/envelope", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
 	}
 }
 
