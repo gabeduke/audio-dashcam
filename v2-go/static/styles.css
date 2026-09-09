@@ -130,11 +130,52 @@ main {
   border-radius: 10px;
   overflow: hidden;
 }
-.viz-wrap canvas { display: block; width: 100%; height: 100%; }
+/* Ribbon internals. Every layer is inset:0 and unpositioned in the stacking
+   sense, so paint order is DOM order and .stale::after -- generated content,
+   and therefore the last box -- still lands on top. */
+.rb-layer { position: absolute; inset: 0; pointer-events: none; }
+
+.rb-wave { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.rb-wave path { fill: rgba(52, 211, 153, .72); }
+
+/* Time the buffer has not reached yet. Never drawn as a flat line: that reads
+   as silence, and the two are completely different facts. */
+.rb-hatch {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+  background: repeating-linear-gradient(
+    45deg, rgba(38, 50, 74, .55) 0 5px, rgba(6, 11, 22, 0) 5px 10px);
+}
+
+.rb-band { position: absolute; top: 0; bottom: 0; background: rgba(52, 211, 153, .13); }
+
+.rb-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(38, 50, 74, .9); }
+.rb-mark.on { background: rgba(52, 211, 153, .55); }
+
+.rb-scrim {
+  position: absolute; top: 0; left: 0; right: 0; height: 22px;
+  background: linear-gradient(to bottom, rgba(6, 11, 22, .92), rgba(6, 11, 22, 0));
+}
+
+.rb-label {
+  position: absolute; top: 5px; padding: 0 4px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .06em;
+  color: var(--ink-faint); white-space: nowrap;
+}
+.rb-label.on { color: var(--accent); }
+.rb-now-label { right: 7px; left: auto; color: var(--accent); }
+
+.rb-now { position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: var(--accent); }
+
+.rb-readout {
+  position: absolute; left: 9px; bottom: 6px; margin: 0;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
+  color: var(--ink-faint); white-space: nowrap;
+}
 
 .viz-wrap.stale::after {
   content: "no signal";
   position: absolute; inset: 0;
+  z-index: 2;
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 12px; letter-spacing: .12em;
   text-transform: uppercase; color: var(--danger);
@@ -473,6 +514,12 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
     top: calc(var(--topbar-h) + 16px);
   }
 
+  /* Width is linear but the compression is logarithmic, so widening inside a
+     column (338px -> 522px) fights a curve that needs about 10x. Spanning both
+     gets 1246px, where an 8-bar phrase at the old end is 4.3px instead of
+     1.8px -- the difference between visible and not. */
+  .viz-wrap { grid-column: 1 / -1; }
+
   .viz-wrap { height: 160px; }
 }
 
@@ -511,6 +558,10 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
   .col { gap: 8px; }
   .panel { padding: 10px; }
   .viz-wrap { height: 64px; }
+
+  /* 64px of ribbon has no room for a readout under the waveform. The same
+     tier already drops .last and the channel diagnostic. */
+  .rb-readout { display: none; }
 
   .col-monitor #chan-diag { display: none; }
   .last { display: none; }

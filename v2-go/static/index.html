@@ -45,12 +45,15 @@
 
 <main>
 
+  <!-- The ribbon is a direct child of main, not of a column: at the
+       two-column breakpoints it spans both (grid-column: 1 / -1), which is the
+       only way the compressed old end gets enough pixels to be readable.
+       Its contents are built by lib/ribbon.js. -->
+  <div class="viz-wrap" id="viz-wrap"></div>
+
   <div class="col col-monitor">
 
     <section class="panel">
-      <div class="viz-wrap" id="viz-wrap">
-        <canvas id="viz"></canvas>
-      </div>
 
       <div class="meters" id="meters"></div>
 
