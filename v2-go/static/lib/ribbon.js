@@ -7,8 +7,9 @@
 //   left% = (1 - ln(age/A) / ln(T/A)) * 100
 //
 // with A = edge_seconds and T = ring_seconds, both read off the response so the
-// server's bucketing and these markers cannot drift apart. Bucket i of N draws
-// at x = i, so the waveform inverts nothing.
+// server's bucketing and these markers cannot drift apart. The SVG viewBox is
+// n-1 wide and vertex i sits at x = i, so bucket 0 (oldest) lands at 0% under
+// the leftmost marker and bucket n-1 (newest) lands at 100% under "now".
 //
 // It replaces the live visualiser rather than sitting beside it. Resolution at
 // the right edge improves (~50 px/s against the old flat 37.6), latency gets
@@ -44,7 +45,9 @@ export class Ribbon {
     this.spans = [];      // capture tiers in seconds; 0 means the whole ring
     this.selected = null;
     this.data = null;
+    this.dataSpans = null; // the spans this.data was actually fetched with
     this.timer = null;
+    this._seq = 0; // monotonic guard against out-of-order poll responses
 
     wrap.textContent = '';
     this.hatch = add(wrap, 'div', 'rb-hatch');
@@ -70,7 +73,7 @@ export class Ribbon {
 
     this._onVis = () => (document.hidden ? this.stop() : this.start());
     document.addEventListener('visibilitychange', this._onVis);
-    this.start();
+    if (!document.hidden) this.start();
   }
 
   /** @param {number[]} spans tier lengths in seconds; 0 means the whole ring */
@@ -105,18 +108,28 @@ export class Ribbon {
   }
 
   async poll() {
+    const spans = this.spans.slice(); // the spans this request actually asks for
     const w = Math.round(this.wrap.clientWidth) || 340;
     const n = Math.min(MAX_BUCKETS, Math.max(60, w));
-    const q = `buckets=${n}&spans=${this.spans.join(',')}`;
+    const q = `buckets=${n}&spans=${spans.join(',')}`;
+    const seq = ++this._seq;
+
+    let data;
     try {
       const res = await fetch(`/api/envelope?${q}`, { cache: 'no-store' });
       if (!res.ok) return; // keep the last ribbon drawn
-      this.data = await res.json();
-      this.render();
+      data = await res.json();
     } catch {
       // Keep the last ribbon drawn. The health dot already reports that the
       // server is unreachable, and a second indicator would add nothing.
+      return;
     }
+
+    if (seq !== this._seq) return; // a newer poll already superseded this one
+
+    this.data = data;
+    this.dataSpans = spans;
+    this.render();
   }
 
   render() {
@@ -188,13 +201,18 @@ export class Ribbon {
 
   readoutText(d, span) {
     if (d.buffered_seconds <= 0) return 'buffer empty';
+    if (this.selected === null) return 'connecting';
 
-    const i = this.spans.indexOf(this.selected);
-    const signal = i >= 0 ? (d.signal_seconds?.[i] ?? 0) : 0;
+    const i = this.dataSpans ? this.dataSpans.indexOf(this.selected) : -1;
+    const signal = i >= 0 ? d.signal_seconds?.[i] : undefined;
 
     // Empty wins over under-buffered when both hold: if the buffer holds 90s,
     // the span is 7m and that 90s is silent, SILENT is the more actionable of
-    // the two true statements.
+    // the two true statements. An unknown signal (index not found, or the
+    // response predates the field) is not evidence of silence, so it reads as
+    // a plain span — SILENT is the only line here that stops someone pressing
+    // Capture, and it must earn that with positive evidence.
+    if (signal === undefined) return `last ${fmtDur(span)}`;
     if (signal < 0.5) return `last ${fmtDur(span)} — SILENT, this would save nothing`;
     if (span > d.buffered_seconds + 0.5) {
       return `last ${fmtDur(span)} — only ${fmtDur(Math.round(d.buffered_seconds))} buffered`;
