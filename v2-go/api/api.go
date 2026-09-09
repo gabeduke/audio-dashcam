@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -371,6 +372,15 @@ func statModTime(f *os.File) (t time.Time) {
 // cannot be used as storage.
 const maxLabelLen = 120
 
+// minBPM and maxBPM bound an edited tempo. The range is deliberately far wider
+// than the EP will ever produce: the free-running clock does not reliably match
+// the loaded project tempo, so the point of the field is that the owner
+// overrides it -- including for takes whose clock reading was confidently wrong.
+const (
+	minBPM = 20.0
+	maxBPM = 400.0
+)
+
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a
 // replace: pointers (and a RawMessage for trim) distinguish "field absent"
 // from "field set to its zero value", so starring a take cannot silently clear
@@ -394,6 +404,7 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		Label   *string         `json:"label"`
 		Starred *bool           `json:"starred"`
 		Trim    json.RawMessage `json:"trim"`
+		BPM     json.RawMessage `json:"bpm"`
 	}
 	if err := dec.Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -431,6 +442,28 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// RawMessage, like trim: absent, null and a value are three states. An
+	// empty submission from the UI arrives as null and clears the field rather
+	// than storing a tempo of zero.
+	if body.BPM != nil {
+		if string(body.BPM) == "null" {
+			m.BPM = nil
+		} else {
+			var v float64
+			if err := json.Unmarshal(body.BPM, &v); err != nil {
+				writeErr(w, http.StatusBadRequest, "bpm must be a number")
+				return
+			}
+			if math.IsNaN(v) || math.IsInf(v, 0) || v < minBPM || v > maxBPM {
+				writeErr(w, http.StatusBadRequest,
+					fmt.Sprintf("bpm must be between %g and %g", minBPM, maxBPM))
+				return
+			}
+			v = math.Round(v*100) / 100
+			m.BPM = &v
+		}
+	}
+
 	if err := audio.WriteMeta(wav, m); err != nil {
 		switch {
 		case errors.Is(err, audio.ErrNewerSidecar):
@@ -453,7 +486,8 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		Label   string      `json:"label"`
 		Starred bool        `json:"starred"`
 		Trim    *audio.Trim `json:"trim"`
-	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim})
+		BPM     *float64    `json:"bpm"`
+	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM})
 }
 
 // sanitizeLabel prepares a user-supplied label for storage. It strips control

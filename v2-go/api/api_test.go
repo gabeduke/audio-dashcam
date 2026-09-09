@@ -465,3 +465,127 @@ func TestStatusWithNoMIDISourceIsNotConnected(t *testing.T) {
 		t.Errorf("midi_bpm = %v, want null", *bpm)
 	}
 }
+
+func TestPatchTakeSetsBPM(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_a.wav")
+
+	w := patch(t, r, "jam_a.wav", `{"bpm":129.874}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	got := audio.ReadMeta(filepath.Join(dir, "jam_a.wav"))
+	if got.BPM == nil || *got.BPM != 129.87 {
+		t.Errorf("BPM = %v, want 129.87 (rounded to two decimals)", got.BPM)
+	}
+}
+
+// An empty submission clears the field rather than storing zero. The UI sends
+// null when the input is emptied.
+func TestPatchTakeClearsBPMWithNull(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeTake(t, dir, "jam_a.wav")
+	bpm := 120.0
+	if err := audio.WriteMeta(wav, audio.Meta{BPM: &bpm}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := patch(t, r, "jam_a.wav", `{"bpm":null}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	if got := audio.ReadMeta(wav); got.BPM != nil {
+		t.Errorf("BPM = %v, want nil", *got.BPM)
+	}
+}
+
+// The merge must stay a merge: setting a tempo cannot silently drop a label.
+func TestPatchTakeBPMDoesNotClearTheLabel(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeTake(t, dir, "jam_a.wav")
+	if err := audio.WriteMeta(wav, audio.Meta{Label: "keep me", Starred: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := patch(t, r, "jam_a.wav", `{"bpm":92}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	got := audio.ReadMeta(wav)
+	if got.Label != "keep me" || !got.Starred {
+		t.Errorf("patching bpm lost fields: %+v", got)
+	}
+}
+
+// And the reverse: renaming must not drop a tempo.
+func TestPatchTakeLabelDoesNotClearTheBPM(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeTake(t, dir, "jam_a.wav")
+	bpm := 92.0
+	if err := audio.WriteMeta(wav, audio.Meta{BPM: &bpm}); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := patch(t, r, "jam_a.wav", `{"label":"renamed"}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	got := audio.ReadMeta(wav)
+	if got.BPM == nil || *got.BPM != 92 {
+		t.Errorf("renaming lost the BPM: %+v", got)
+	}
+}
+
+// The range is deliberately wider than the EP will ever produce, because the
+// whole point of the field is that the owner overrides it.
+func TestPatchTakeAcceptsTheRangeBounds(t *testing.T) {
+	for _, v := range []string{"20", "400", "20.0", "399.99"} {
+		r, dir := newTestAPI(t)
+		writeTake(t, dir, "jam_a.wav")
+		if w := patch(t, r, "jam_a.wav", `{"bpm":`+v+`}`); w.Code != http.StatusOK {
+			t.Errorf("bpm %s: status = %d, want 200 (body %s)", v, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestPatchTakeRejectsOutOfRangeBPM(t *testing.T) {
+	for _, v := range []string{"0", "19.99", "400.01", "1000", "-120"} {
+		r, dir := newTestAPI(t)
+		wav := writeTake(t, dir, "jam_a.wav")
+		w := patch(t, r, "jam_a.wav", `{"bpm":`+v+`}`)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("bpm %s: status = %d, want 400", v, w.Code)
+		}
+		if got := audio.ReadMeta(wav); got.BPM != nil {
+			t.Errorf("bpm %s: a rejected value was written anyway (%v)", v, *got.BPM)
+		}
+	}
+}
+
+func TestPatchTakeRejectsNonNumericBPM(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_a.wav")
+
+	if w := patch(t, r, "jam_a.wav", `{"bpm":"120"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+// The response is explicit rather than the Meta struct, so a clear-to-empty
+// patch reports what it actually did instead of omitting the field.
+func TestPatchTakeResponseCarriesTheBPM(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_a.wav")
+
+	w := patch(t, r, "jam_a.wav", `{"bpm":92.5}`)
+	var got struct {
+		BPM *float64 `json:"bpm"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.BPM == nil || *got.BPM != 92.5 {
+		t.Errorf("response bpm = %v, want 92.5", got.BPM)
+	}
+}
