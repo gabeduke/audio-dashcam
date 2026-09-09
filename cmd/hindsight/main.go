@@ -148,8 +148,15 @@ func dirExists(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// noCacheShell keeps the app shell fresh so a redeploy is picked up on reload,
-// while letting fingerprinted vendor assets cache normally.
+// noCacheShell sends Cache-Control: no-cache for the app shell -- HTML, JS,
+// CSS, JSON and directory indexes -- so the browser revalidates them and a
+// redeploy is picked up on reload rather than on a cache expiry.
+//
+// Nothing under web/static is fingerprinted, so this covers the vendored
+// WaveSurfer copy too: /vendor/wavesurfer.esm.js is a .js like any other.
+// Everything else -- the icons, and anything else without one of those
+// extensions -- falls through to http.FileServer's ETag and Last-Modified
+// handling untouched.
 func noCacheShell(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch filepath.Ext(r.URL.Path) {

@@ -185,8 +185,12 @@ vendored copy of WaveSurfer.js for scrubbing takes.
 
 It is served with `http.FileServer` straight from disk on every request, which
 is why `./deploy.sh --static` can push a CSS change in about a second with no
-rebuild and no restart. The app shell is sent `Cache-Control: no-cache` so a
-redeploy is picked up on reload; fingerprinted vendor assets cache normally.
+rebuild and no restart. Anything served with an `.html`, `.js`, `.css` or
+`.json` extension is sent `Cache-Control: no-cache`, so the browser revalidates
+it and a redeploy is picked up on reload. Nothing here is fingerprinted, so
+that includes the vendored WaveSurfer copy; the icons carry no explicit
+directive and fall through to `http.FileServer`'s ETag and `Last-Modified`
+handling.
 
 The takes list is polled every five seconds and guarded by the `/api/jams`
 ETag, so an unchanged list does not re-render and interrupt a playing preview.

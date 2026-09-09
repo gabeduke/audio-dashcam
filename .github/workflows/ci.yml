@@ -60,3 +60,8 @@ jobs:
           done
           cat /tmp/status.json
           test -s /tmp/status.json
+          # /api/status answers 200 even when the source failed to open, so a
+          # non-empty body proves only that the HTTP server is up. capture_healthy
+          # flips true as soon as demoSource.Open returns, well inside the poll
+          # above, so this is what actually asserts the demo path works.
+          grep -q '"capture_healthy":true' /tmp/status.json

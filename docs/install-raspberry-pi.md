@@ -45,7 +45,10 @@ cd "${tarball%.tar.gz}"
 
 The archive contains `bin/hindsight`, `web/static`, `deploy/`, `install.sh`,
 and copies of the README, CHANGELOG and LICENSE. It does **not** contain
-`scripts/` — the Python probes below come from a git checkout.
+`scripts/` — the Python probes below come from a git checkout. `docs/` is not
+in it either, so the relative links in the archived README (including the one
+to this page) resolve only against the repository on GitHub, not against the
+directory you just unpacked.
 
 ### What the installer does
 
@@ -54,25 +57,30 @@ and copies of the README, CHANGELOG and LICENSE. It does **not** contain
 2. `sudo apt-get install libportaudio2 libasound2 ffmpeg`. The binary is
    prebuilt, so the `-dev` package is not needed. `ffmpeg` renders the mp3
    previews the UI streams.
-3. Offers to migrate an existing `audio-dashcam` install, if it finds one.
-4. Copies the binary to `~/hindsight/bin` and the UI to `~/hindsight/web`.
+3. Runs `bin/hindsight --version` once. If the release binary cannot load on
+   this machine — a glibc mismatch is the way that happens — it says so here,
+   before anything has been changed, rather than as an unexplained "service
+   did not come up" at the end.
+4. Offers to migrate an existing `audio-dashcam` install, if it finds one.
+5. Copies the binary to `~/hindsight/bin` and the UI to `~/hindsight/web`.
    The UI is staged and swapped, so a failed copy never leaves you with no
    `web/static`.
-5. Writes `~/hindsight/hindsight.env` from the example — **and leaves an
+6. Writes `~/hindsight/hindsight.env` from the example — **and leaves an
    existing one alone**, so re-running it is how you upgrade.
-6. Installs and restarts `~/.config/systemd/user/hindsight.service`.
-7. `sudo loginctl enable-linger` so the service survives logout. Without this
+7. Installs and restarts `~/.config/systemd/user/hindsight.service`.
+8. `sudo loginctl enable-linger` so the service survives logout. Without this
    it dies the moment you close the SSH session. If that fails it warns and
    keeps going rather than failing the install.
-8. Polls `http://127.0.0.1:5000/api/status` for about 15 seconds and reports
+9. Polls `http://127.0.0.1:5000/api/status` for about 15 seconds and reports
    whether capture came up healthy. If it never answers, it prints the last 30
    journal lines and exits non-zero.
 
-That last port is **hardcoded**. If you set `PORT` in `hindsight.env` before the
-first install, the poll asks 5000, gets nothing, and reports "service did not
-come up" for a service that is running perfectly on your port. Check
-`systemctl --user status hindsight.service` before believing it. Setting `PORT`
-after the first successful install avoids the confusion entirely.
+That last port is **hardcoded**. If `PORT` is set in `hindsight.env`, the poll
+asks 5000, gets nothing, and reports "service did not come up" for a service
+that is running perfectly on your port. That happens on *every* run of the
+installer, upgrades included — the poll never reads your `hindsight.env`. Check
+`systemctl --user status hindsight.service`, or curl your own port, before
+believing it.
 
 ### Where things end up
 

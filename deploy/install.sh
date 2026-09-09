@@ -40,6 +40,20 @@ sudo apt-get update -qq \
 sudo apt-get install -y libportaudio2 libasound2 ffmpeg \
   || die "apt-get install failed; install libportaudio2 libasound2 ffmpeg manually and re-run"
 
+# --- can this binary actually run here? -------------------------------------
+# The whole reason release.yml builds inside debian:bookworm is that Raspberry
+# Pi OS Bookworm ships glibc 2.36 while the arm64 runner links 2.39. If that
+# ever regresses, the only symptom further down is "service did not come up"
+# plus 30 journal lines, which points at everything except the real cause. Run
+# the binary once and say so plainly instead. release.yml runs the same check
+# on the build side.
+#
+# This has to come after the apt-get above -- the binary is dynamically linked
+# against libportaudio2 -- and before the migration below, so a failure here
+# does not leave the machine with the old service already stopped.
+"$SRC/bin/hindsight" --version >/dev/null \
+  || die "the release binary does not run on this machine (glibc mismatch?)"
+
 # --- migrate an existing audio-dashcam install ------------------------------
 OLD_ROOT="$HOME/audio-dashcam"
 if systemctl --user list-unit-files 2>/dev/null | grep -q '^audio-dashcam\.service'; then
@@ -138,16 +152,24 @@ if [ -z "$body" ]; then
 fi
 
 # capture_healthy/last_error are internal/api/api.go statusResponse fields
-# (json tags "capture_healthy" / "last_error"); Go's encoder writes them with
-# no space after the colon, so this literal match is exact today. If that
-# field is ever renamed this simply stops matching and falls into the "not
-# confirmed recording" branch below -- a false "nothing is recording" rather
-# than a false "success", which is the safer direction to be wrong in.
+# (json tags "capture_healthy" / "last_error", neither omitempty); Go's encoder
+# writes them with no space after the colon, so both literal matches are exact
+# today.
+#
+# The two degrade differently if a field is ever renamed or given omitempty.
+# capture_healthy just stops matching and falls into the "not confirmed
+# recording" branch below -- a false "nothing is recording" rather than a false
+# "success", which is the safer direction to be wrong in. last_error is inside
+# a command substitution, so an absent field makes grep exit 1, pipefail
+# propagates it, and set -e would kill the installer outright -- silently, at
+# the exact moment it has something useful to say. Hence the `|| true`: a
+# missing field costs the reason, printed as "(none reported)", not the
+# message.
 if printf '%s' "$body" | grep -q '"capture_healthy":true'; then
   say "running: http://$(hostname).local:5000"
   say "next: set SAVE_CHANNELS in $ROOT/hindsight.env — the default assumes an EP-136"
 else
-  last_error="$(printf '%s' "$body" | grep -o '"last_error":"[^"]*"' | sed -e 's/^"last_error":"//' -e 's/"$//')"
+  last_error="$(printf '%s' "$body" | grep -o '"last_error":"[^"]*"' | sed -e 's/^"last_error":"//' -e 's/"$//' || true)"
   say "running: http://$(hostname).local:5000 — but not recording"
   say "capture error: ${last_error:-(none reported)}"
   say "hindsight will keep retrying on its own; plug the interface in (or fix the error above) — check with: systemctl --user status hindsight.service"

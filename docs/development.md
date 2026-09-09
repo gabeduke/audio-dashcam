@@ -3,7 +3,7 @@
 ## The demo is the fast path
 
 ```bash
-CGO_ENABLED=0 go run ./cmd/hindsight --demo
+RING_SECONDS=120 CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 That runs the whole application — ring, levels, envelope, saving, previews, the
@@ -15,6 +15,15 @@ compiler exists, and the PortAudio binding's only directive is
 library fails with `Package 'portaudio-2.0' not found` before anything runs.
 The build tags in `internal/audio` mean the flag costs nothing: `CGO_ENABLED=0`
 selects `source_nocgo.go`, and the demo source never needed the device path.
+
+`RING_SECONDS=120` deliberately shrinks the ring. The default is the Pi-sized
+`900`: 900 × 48000 × 8ch × 4 bytes is a ~1.38 GB allocation at startup, and the
+ribbon takes fifteen real minutes to fill, so you would spend most of a session
+looking at an empty one. Two minutes fills in two. The cost is one button — the
+UI hides any capture tier longer than the ring, so you get `30s`, `2m` and
+`Full 2m` but not `7m`; see [configuration.md](configuration.md). The README
+and `scripts/screenshots.mjs` use the same 120. CI uses 30, because it only
+needs the process to boot.
 
 Anything that is not specifically about the audio device can be developed and
 tested this way, and CI checks that the demo still boots without cgo on every

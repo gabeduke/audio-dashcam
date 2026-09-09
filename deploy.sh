@@ -46,6 +46,9 @@ if [ "${1:-}" = "--static" ]; then
 fi
 
 echo "[*] syncing to $HOST:~/$DEST"
+# node_modules is excluded because docs/development.md tells you to install
+# Playwright at the repo root to take screenshots; a deploy before you clean it
+# up would push a few hundred MB of Chromium to the Pi over the LAN.
 rsync -az --delete -e "${SSH[*]}" \
   --exclude 'jam_saves' \
   --exclude '.venv' \
@@ -54,6 +57,8 @@ rsync -az --delete -e "${SSH[*]}" \
   --exclude 'bin' \
   --exclude 'hindsight.env' \
   --exclude 'deploy.local.env' \
+  --exclude 'node_modules' \
+  --exclude '.superpowers' \
   ./ "$HOST:~/$DEST/"
 
 echo "[*] building on the Pi"

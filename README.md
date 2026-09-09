@@ -18,7 +18,7 @@ cgo. Go 1.23 or newer is the only requirement.
 
 ```bash
 git clone https://github.com/gabeduke/hindsight && cd hindsight
-CGO_ENABLED=0 go run ./cmd/hindsight --demo
+RING_SECONDS=120 CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 Then open <http://127.0.0.1:5000>.
@@ -27,12 +27,17 @@ Then open <http://127.0.0.1:5000>.
 binding, which needs the C library present — so on a machine that does not have
 it the build fails before the demo ever starts.
 
+`RING_SECONDS=120` deliberately shrinks the ring for the demo. The default is
+the Pi-sized `900`, which allocates about 1.4 GB up front and takes fifteen
+real minutes to fill — so the buffer ribbon would sit almost empty for the
+whole time you were looking at it.
+
 **On macOS, port 5000 is usually taken** by ControlCenter's AirPlay Receiver,
 and you get `http: listen tcp :5000: bind: address already in use`. Pick
 another port:
 
 ```bash
-PORT=5173 CGO_ENABLED=0 go run ./cmd/hindsight --demo
+RING_SECONDS=120 PORT=5173 CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 Takes are written to `~/hindsight/jam_saves` unless you set `OUTPUT_DIR`. If

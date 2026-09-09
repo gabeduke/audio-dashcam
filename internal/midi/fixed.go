@@ -11,6 +11,4 @@ func NewFixedClock(bpm float64) *FixedClock { return &FixedClock{bpm: bpm} }
 
 func (c *FixedClock) Connected() bool { return true }
 
-func (c *FixedClock) Device() string { return "demo clock" }
-
 func (c *FixedClock) BPM(_, _ time.Time) (float64, bool) { return c.bpm, true }
