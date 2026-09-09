@@ -127,10 +127,33 @@ func (e *Envelope) bufferedLocked() int {
 	return int(e.total)
 }
 
+// EdgeSecondsEffective is the edge age Buckets actually places its newest
+// addressable bucket against: EdgeSeconds normally, or RingSeconds()/2 when
+// the ring is too short for EdgeSeconds to sit strictly inside it.
+//
+// This is the one place that decides that fallback. The handler reports this
+// rather than the bare EdgeSeconds constant, because the client re-implements
+// Buckets's age(x) formula to place its markers, reading edge_seconds and
+// ring_seconds back out of the same response -- if the response ever named a
+// different edge than Buckets used, the two would silently draw against
+// different axes.
+func (e *Envelope) EdgeSecondsEffective() float64 {
+	t := e.RingSeconds()
+	a := EdgeSeconds
+	// A log axis needs its newest addressable age to sit strictly inside the
+	// ring -- age(x) at x=0 must be older than age(x=1), or the exponent
+	// below has nothing to span. NewEnvelope(100, ..., 10) makes t equal
+	// EdgeSeconds exactly, which is why this is <=, not <.
+	if t <= a {
+		a = t / 2
+	}
+	return a
+}
+
 // Buckets aggregates the envelope into n log-spaced buckets, oldest first, so
 // bucket i draws at x = i/n across the ribbon. The mapping is
 //
-//	age(x) = A * (T/A)^(1-x)      A = EdgeSeconds, T = RingSeconds()
+//	age(x) = A * (T/A)^(1-x)      A = EdgeSecondsEffective(), T = RingSeconds()
 //
 // which the client re-implements to place its markers, reading A and T off the
 // same response so the two cannot drift apart.
@@ -152,14 +175,7 @@ func (e *Envelope) Buckets(n int) []byte {
 	out := make([]byte, n)
 
 	t := e.RingSeconds()
-	a := EdgeSeconds
-	// A log axis needs its newest addressable age to sit strictly inside the
-	// ring -- age(x) at x=0 must be older than age(x=1), or the exponent
-	// below has nothing to span. NewEnvelope(100, ..., 10) makes t equal
-	// EdgeSeconds exactly, which is why this is <=, not <.
-	if t <= a {
-		a = t / 2
-	}
+	a := e.EdgeSecondsEffective()
 	span := math.Log(t / a)
 
 	// Sized to the ring's fixed capacity, not to what is buffered, so the

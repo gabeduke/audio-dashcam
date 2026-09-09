@@ -276,6 +276,19 @@ func TestEnvelopeReportsRingAndBuffered(t *testing.T) {
 	}
 }
 
+func TestEnvelopeReportsTheEffectiveEdgeOnAShortRing(t *testing.T) {
+	// A 1.0s ring sits exactly on the t == EdgeSeconds boundary where Buckets
+	// falls back to RingSeconds()/2. The response must report that same 0.5,
+	// not the bare EdgeSeconds constant, or the client places its markers on
+	// an axis the server did not actually bucket against.
+	r := newEnvelopeAPI(t, 100, 100) // 100 bins x 10ms = 1.0s ring, fully loud
+	body := getEnvelope(t, r, "?buckets=8")
+
+	if got := body["edge_seconds"].(float64); got < 0.499 || got > 0.501 {
+		t.Errorf("edge_seconds = %v, want 0.5 (RingSeconds()/2 on a 1.0s ring)", got)
+	}
+}
+
 func TestEnvelopeBucketsAreBase64OfTheRequestedLength(t *testing.T) {
 	r := newEnvelopeAPI(t, 90000, 90000)
 	body := getEnvelope(t, r, "?buckets=64")

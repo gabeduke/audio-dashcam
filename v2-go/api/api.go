@@ -285,7 +285,7 @@ func (a *API) handleEnvelope(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelopeResponse{
 		RingSeconds:     ring,
 		BufferedSeconds: a.env.BufferedSeconds(),
-		EdgeSeconds:     audio.EdgeSeconds,
+		EdgeSeconds:     a.env.EdgeSecondsEffective(),
 		Buckets:         a.env.Buckets(buckets),
 		SignalSeconds:   sig,
 	})

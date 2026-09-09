@@ -166,6 +166,26 @@ func TestBucketsClampToAtLeastOne(t *testing.T) {
 	}
 }
 
+func TestEdgeSecondsEffectiveMatchesWhatBucketsUsed(t *testing.T) {
+	// A ring longer than EdgeSeconds: no fallback, the constant stands.
+	long := NewEnvelope(90000, []int{0}, 10) // 900s
+	if got := long.EdgeSecondsEffective(); got != EdgeSeconds {
+		t.Fatalf("EdgeSecondsEffective() on a long ring = %v, want the EdgeSeconds constant (%v)", got, EdgeSeconds)
+	}
+
+	// NewEnvelope(100, ..., 10) gives a 1.0s ring -- exactly the t == a
+	// boundary the <= in Buckets exists for, so Buckets falls back to t/2.
+	// The response must report that same 0.5, or the client places its
+	// markers on an axis the server did not actually bucket against.
+	short := NewEnvelope(100, []int{0}, 10)
+	if got := short.RingSeconds(); got < 0.999 || got > 1.001 {
+		t.Fatalf("fixture ring = %vs, want exactly 1.0s (the t == EdgeSeconds boundary)", got)
+	}
+	if got := short.EdgeSecondsEffective(); got < 0.499 || got > 0.501 {
+		t.Fatalf("EdgeSecondsEffective() on a 1.0s ring = %v, want 0.5 (RingSeconds()/2)", got)
+	}
+}
+
 func TestNewEnvelopeClampsCapBinsAndBinMillis(t *testing.T) {
 	e := NewEnvelope(0, []int{0}, 10) // capBins clamps to 1
 	if got := e.RingSeconds(); got < 0.0099 || got > 0.0101 {
