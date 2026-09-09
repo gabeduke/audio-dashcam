@@ -18,17 +18,21 @@ cgo. Go 1.23 or newer is the only requirement.
 
 ```bash
 git clone https://github.com/gabeduke/hindsight && cd hindsight
-go run ./cmd/hindsight --demo
+CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 Then open <http://127.0.0.1:5000>.
+
+`CGO_ENABLED=0` is what makes that true. Without it Go links the real PortAudio
+binding, which needs the C library present — so on a machine that does not have
+it the build fails before the demo ever starts.
 
 **On macOS, port 5000 is usually taken** by ControlCenter's AirPlay Receiver,
 and you get `http: listen tcp :5000: bind: address already in use`. Pick
 another port:
 
 ```bash
-PORT=5173 go run ./cmd/hindsight --demo
+PORT=5173 CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 Takes are written to `~/hindsight/jam_saves` unless you set `OUTPUT_DIR`. If
@@ -38,7 +42,9 @@ mp3 preview to play or draw.
 ## Install on a Raspberry Pi
 
 Every merge to `master` publishes an arm64 tarball. Download it, check it,
-unpack it, run the installer:
+unpack it, run the installer. (These URLs resolve once the repository is
+renamed to `hindsight`; until then, use the current repository's releases
+page.)
 
 ```bash
 curl -fsSLO https://github.com/gabeduke/hindsight/releases/latest/download/SHA256SUMS

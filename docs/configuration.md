@@ -113,8 +113,12 @@ Raising it further is harmless. Lowering it is how you get the 84% back.
 
 ## Disk and pruning
 
-`MIN_FREE_GB` is a floor, not a quota: a capture that would take the volume
-below it is refused with HTTP 507 rather than half-written.
+`MIN_FREE_GB` is a pre-flight floor, not a prediction. A save checks the free
+space **as it stands** and refuses with HTTP 507 if it is already below the
+threshold; it does not compare the threshold against the size of the write it
+is about to make. With `MIN_FREE_GB=1.0`, 1.1 GB free and a 1.3 GB full-ring
+save, the check passes and the write proceeds — and can fill the volume. Set it
+comfortably above one full-ring take, not just above zero.
 
 `MAX_SAVES` prunes in the background after a successful save. It keeps the
 first `MAX_SAVES` takes in the order `/api/jams` lists them — starred first,

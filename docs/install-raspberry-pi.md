@@ -68,6 +68,12 @@ and copies of the README, CHANGELOG and LICENSE. It does **not** contain
    whether capture came up healthy. If it never answers, it prints the last 30
    journal lines and exits non-zero.
 
+That last port is **hardcoded**. If you set `PORT` in `hindsight.env` before the
+first install, the poll asks 5000, gets nothing, and reports "service did not
+come up" for a service that is running perfectly on your port. Check
+`systemctl --user status hindsight.service` before believing it. Setting `PORT`
+after the first successful install avoids the confusion entirely.
+
 ### Where things end up
 
 ```
@@ -90,6 +96,10 @@ lsusb                    # is it on the bus at all
 arecord -l               # does ALSA see a capture device
 cat /proc/asound/cards   # the same entry Hindsight's MIDI discovery scans
 ```
+
+`arecord` comes from `alsa-utils`, which the installer does **not** pull in —
+Hindsight itself does not need it. `sudo apt install alsa-utils` if the command
+is missing. (`lsusb` is from `usbutils`, likewise.)
 
 `DEVICE_MATCH` is a substring match against the **PortAudio** device name, and
 `/proc/asound/cards` is what MIDI discovery searches. The two usually agree on
@@ -170,6 +180,16 @@ Useful so the address has no port in it, and required if you want
 `/api/live` is a WebSocket, so the upgrade headers must be proxied. Without
 them the page loads and the meters never move.
 
+Write this as `/etc/nginx/sites-available/hindsight`, then symlink it into
+`sites-enabled` **and remove the stock `default` site**. Debian ships that file
+already claiming `default_server` on port 80, and two `default_server`
+directives on the same address make `nginx -t` fail:
+
+```bash
+sudo rm /etc/nginx/sites-enabled/default
+sudo ln -s /etc/nginx/sites-available/hindsight /etc/nginx/sites-enabled/
+```
+
 ```nginx
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -179,6 +199,13 @@ map $http_upgrade $connection_upgrade {
 server {
     listen 80 default_server;
 
+    # A full-ring download is hundreds of megabytes; streaming it straight
+    # through avoids nginx spooling the whole thing to disk first.
+    proxy_buffering off;
+
+    # Nothing here uploads, so this only stops a stray 413 on a large PATCH.
+    client_max_body_size 0;
+
     location / {
         proxy_pass http://127.0.0.1:5000;
         proxy_http_version 1.1;
@@ -186,15 +213,13 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host       $host;
         proxy_read_timeout 3600s;
-
-        # A full-ring download is hundreds of megabytes.
-        proxy_buffering off;
-        client_max_body_size 0;
     }
 }
 ```
 
-`sudo nginx -t && sudo systemctl reload nginx`.
+`sudo nginx -t && sudo systemctl reload nginx`. Run `nginx -t` before the
+reload — it is what catches both the `default_server` collision and a missing
+`map` block.
 
 ## Optional: HTTPS with `tailscale serve`
 

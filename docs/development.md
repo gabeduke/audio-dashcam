@@ -3,15 +3,18 @@
 ## The demo is the fast path
 
 ```bash
-go run ./cmd/hindsight --demo
+CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 That runs the whole application — ring, levels, envelope, saving, previews, the
-UI — against a synthetic 96 BPM loop. No hardware, no PortAudio, and no cgo:
+UI — against a synthetic 96 BPM loop, with no hardware and no PortAudio.
 
-```bash
-CGO_ENABLED=0 go build ./cmd/hindsight
-```
+`CGO_ENABLED=0` is not optional here. Go enables cgo by default wherever a C
+compiler exists, and the PortAudio binding's only directive is
+`#cgo pkg-config: portaudio-2.0`, so a default build on a machine without the C
+library fails with `Package 'portaudio-2.0' not found` before anything runs.
+The build tags in `internal/audio` mean the flag costs nothing: `CGO_ENABLED=0`
+selects `source_nocgo.go`, and the demo source never needed the device path.
 
 Anything that is not specifically about the audio device can be developed and
 tested this way, and CI checks that the demo still boots without cgo on every
@@ -21,7 +24,8 @@ run.
 `PORT=` for anything you run locally:
 
 ```bash
-RING_SECONDS=120 OUTPUT_DIR=/tmp/hindsight PORT=5173 go run ./cmd/hindsight --demo
+RING_SECONDS=120 OUTPUT_DIR=/tmp/hindsight PORT=5173 \
+  CGO_ENABLED=0 go run ./cmd/hindsight --demo
 ```
 
 `--version` prints the build version and exits. It reads `dev` unless the
@@ -91,7 +95,9 @@ The older `DASHCAM_*` spellings of these variables still work, so an existing
 
 Merging to `master` runs the test suite, then builds and publishes:
 
-- a tag `vYYYY.MM.DD.N`, where `N` counts the releases made that UTC day
+- a tag `vYYYY.MM.DD.N`, where `N` increments per release that UTC day. It is
+  the highest existing suffix plus one, not a count — a deleted tag leaves a
+  gap rather than causing a collision
 - `hindsight_<tag>_linux_arm64.tar.gz` and `SHA256SUMS`
 - a `CHANGELOG.md` entry, committed back to `master` with `[skip ci]`
 
@@ -113,9 +119,17 @@ are deliberately not shipped in the release tarball.
 | `midi-probe.py` | What does the interface actually send over MIDI, and when? Walks three phases and prints a verdict per question |
 | `take-envelope.py` | What does a take look like? Reduces a WAV to a base64 amplitude envelope, so a 346 MB take can be judged without copying it off the Pi |
 
-They use only the standard library and the HTTP API, so there is nothing to
-install. `channel-probe.py` can run from anywhere; `midi-probe.py` has to run
-on the Pi, with the interface plugged in.
+All three are standard library only — no pip, no virtualenv. What they reach
+for differs:
+
+- `channel-probe.py` talks to the HTTP API, so it runs from anywhere that can
+  reach the Pi.
+- `take-envelope.py` reads a WAV off disk directly and touches no API at all,
+  so it runs wherever the file is.
+- `midi-probe.py` shells out to `amidi`, which comes from **`alsa-utils`**
+  (`sudo apt install alsa-utils`); without it the script exits with
+  `amidi not found. Install alsa-utils.` It has to run on the Pi, with the
+  interface plugged in.
 
 `midi-probe.py` and `take-envelope.py` are also where several of the MIDI and
 envelope decisions are argued out, in their docstrings. Worth reading before

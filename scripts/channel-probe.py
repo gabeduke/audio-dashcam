@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report the peak level seen on each input channel of a running dashcam.
+"""Report the peak level seen on each input channel of a running Hindsight.
 
 Teenage Engineering documents the EP-136 as an 8-in/4-out interface whose eight
 inputs are four stereo record pairs -- channel one, channel two, aux and the
@@ -11,7 +11,8 @@ because a status poll only ever reports the newest 10ms bin and quiet moments
 in real material would otherwise read as a dead channel.
 
 Usage:
-    python3 scripts/channel-probe.py "$DASHCAM_ADDR" --seconds 20
+    python3 scripts/channel-probe.py "$HINDSIGHT_ADDR" --seconds 20
+    python3 scripts/channel-probe.py <pi-host>:5000 --seconds 20
 """
 
 import argparse
@@ -40,9 +41,14 @@ def bar(db, floor, width=32):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    # HINDSIGHT_ADDR with a DASHCAM_ADDR fallback, mirroring what deploy.sh
+    # does for HINDSIGHT_HOST, so an existing shell profile keeps working.
     ap.add_argument("host", nargs="?",
-                    default=os.environ.get("DASHCAM_ADDR", "dashcam.local"),
-                    help="dashcam host or host:port (default: $DASHCAM_ADDR)")
+                    default=os.environ.get("HINDSIGHT_ADDR",
+                                           os.environ.get("DASHCAM_ADDR",
+                                                          "hindsight.local")),
+                    help="host or host:port (default: $HINDSIGHT_ADDR, "
+                         "then $DASHCAM_ADDR, then hindsight.local)")
     ap.add_argument("--seconds", type=float, default=20.0,
                     help="how long to sample for (default: 20)")
     ap.add_argument("--interval", type=float, default=0.1,

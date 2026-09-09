@@ -197,8 +197,8 @@ curl -X PATCH 'http://127.0.0.1:5000/api/take?file=jam_2026-09-09_145852.wav' \
 |---|---|---|
 | `label` | string | Control and Unicode format characters stripped, trimmed, capped at 120 runes |
 | `starred` | bool | |
-| `trim` | `{start_frame, end_frame}` or `null` | `end_frame` must exceed `start_frame`; `null` clears |
-| `bpm` | number or `null` | 20–400, rounded to two decimals; `null` clears |
+| `trim` | `{start_frame, end_frame}` or `null` | `start_frame` must be `>= 0` **and** `end_frame` must exceed `start_frame`; `null` clears |
+| `bpm` | number or `null` | 20–400, rounded to two decimals; rejects NaN and ±Inf; `null` clears |
 
 The response is the merged result:
 
@@ -208,9 +208,10 @@ The response is the merged result:
 
 | Status | When |
 |---|---|
-| 400 | Bad file name, malformed JSON, trailing content, or a field out of range |
+| 400 | Missing or bad `file`, malformed JSON, trailing content, or a field out of range |
 | 404 | No such take |
 | 409 | The sidecar was written by a **newer build** than this one. Rewriting it would drop fields this build does not know about |
+| 500 | The sidecar write failed for any other reason. The detail is logged, not returned — the real error names absolute paths and the temp-file scheme |
 | 507 | Disk full |
 
 The tempo range is deliberately far wider than any interface will produce,
@@ -227,17 +228,18 @@ a phone can draw a take without downloading the audio.
 { "version": 1, "channels": 2, "sample_rate": 48000, "duration": 10, "buckets": 1026, "data": [[...]] }
 ```
 
-404 if peaks have not been generated. Served immutable — a take's peaks never
-change.
+400 if `file` is missing or is not a bare `.wav` name, 404 if peaks have not
+been generated. Served immutable — a take's peaks never change.
 
 ## `GET /api/download?file=[&dl=1]`
 
 Serves the take or its mp3 preview, with range requests. Only `.wav` and `.mp3`
 names in `OUTPUT_DIR` are addressable; anything with a path in it is rejected.
 
-Inline by default so `<audio>` can stream it. `dl=1` adds a
-`Content-Disposition: attachment` header instead. 400 on a rejected name, 404
-if the file is not there.
+Inline by default so `<audio>` can stream it. `dl` adds a
+`Content-Disposition: attachment` header instead — **any non-empty value**, so
+`dl=0` and `dl=false` force the download just as `dl=1` does. 400 if `file` is
+missing or rejected, 404 if it is not there.
 
 ## `DELETE /api/delete?file=`
 
@@ -248,8 +250,8 @@ Removes the take and every sidecar: `_preview.mp3`, `.peaks.json`,
 { "status": "deleted", "name": "jam_2026-09-09_145852.wav" }
 ```
 
-Succeeds whether or not the files were there. 400 on a name with a path in it
-or an extension other than `.wav`.
+Succeeds whether or not the files were there. 400 if `file` is missing, has a
+path in it, or has an extension other than `.wav`.
 
 ---
 

@@ -21,12 +21,12 @@ dashcam service can keep running, because MIDI is a separate USB interface from
 the audio endpoint it holds open.
 
 Usage:
-    ssh "$DASHCAM_HOST"
+    ssh "$HINDSIGHT_HOST"
     python3 ~/hindsight/scripts/midi-probe.py
 
     # or, without deploying, straight from a checkout on your laptop:
-    ssh "$DASHCAM_HOST" 'cat > /tmp/midi-probe.py' < scripts/midi-probe.py
-    ssh -t "$DASHCAM_HOST" 'python3 /tmp/midi-probe.py'
+    ssh "$HINDSIGHT_HOST" 'cat > /tmp/midi-probe.py' < scripts/midi-probe.py
+    ssh -t "$HINDSIGHT_HOST" 'python3 /tmp/midi-probe.py'
 
 Options:
     --match EP-136   substring matched against the amidi port list
