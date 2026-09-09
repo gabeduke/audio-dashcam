@@ -1,7 +1,8 @@
 // Audio Dashcam — app entry.
 
 import { connectLive } from '/lib/live.js';
-import { Visualizer, Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
+import { Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
+import { Ribbon } from '/lib/ribbon.js';
 import { TakesList } from '/lib/takes.js';
 import { initWakeLock } from '/lib/wakelock.js';
 
@@ -12,7 +13,6 @@ const el = {
   healthDot: $('health-dot'),
   healthText: $('health-text'),
   vizWrap: $('viz-wrap'),
-  viz: $('viz'),
   meters: $('meters'),
   chanGrid: $('chan-grid'),
   chanSaving: $('chan-saving'),
@@ -64,7 +64,7 @@ function confirmDelete(name) {
 // ---------------------------------------------------------------- state
 
 let status = null;
-let viz = null;
+let ribbon = null;
 let mainMeters = null;
 let chanMeters = null;
 let selSeconds = 30;
@@ -101,9 +101,13 @@ function buildDurations(ringSeconds) {
       for (const other of el.durSeg.children) {
         other.setAttribute('aria-pressed', String(Number(other.dataset.seconds) === selSeconds));
       }
+      ribbon?.setSelected(selSeconds);
     });
     el.durSeg.appendChild(b);
   }
+
+  ribbon?.setSpans(opts.map((o) => o.s));
+  ribbon?.setSelected(selSeconds);
 }
 
 function buildChannelStrip(channels, saveChannels) {
@@ -132,7 +136,6 @@ function applyStatus(s) {
       labels: sel.length > 1 ? ['L', 'R'] : ['M'],
       selected: [],
     });
-    viz?.setChannels(sel);
 
     el.chanSaving.textContent = s.save_channels.join(' & ');
     el.chanDevice.textContent = s.device || 'no device';
@@ -233,11 +236,10 @@ el.captureBtn.addEventListener('click', capture);
 
 // ---------------------------------------------------------------- live
 
-viz = new Visualizer(el.viz, { channels: [2, 3] });
+ribbon = new Ribbon(el.vizWrap);
 
 connectLive({
   onFrame: (f) => {
-    viz.push(f);
     if (!mainMeters || !status) return;
     const sel = status.save_channels.map((c) => c - 1);
     const last = f.bins?.[f.bins.length - 1];
