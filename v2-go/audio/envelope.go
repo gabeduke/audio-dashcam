@@ -6,9 +6,22 @@ import (
 )
 
 // EdgeSeconds is the age at the ribbon's right edge, and the newest age the
-// log axis can address. Fixed at the client's poll interval: a smaller value
-// would draw detail a 1 Hz poll cannot deliver.
-const EdgeSeconds = 1.0
+// log axis can address. It sets how much of the width the recent end gets:
+// the last 30s occupies ln(30/EdgeSeconds) / ln(RingSeconds/EdgeSeconds) of
+// the ribbon, so raising it shrinks that share and stretches the rest.
+//
+// At 1s the last 30 seconds took half the ribbon, which is far more than that
+// window needs. At 10s the four capture tiers land at roughly 24/31/28/17
+// percent of the width instead of 50/20/18/11, and the oldest edge sharpens
+// from 4.9 to 3.3 s/px -- the region a real capture has never exercised.
+//
+// The floor is the client's 1 Hz poll: below that the axis would ask for
+// detail the poll cannot deliver. That argues a minimum, not this value.
+//
+// The cost is that ages below it collapse to the right edge. They still show
+// (the newest bucket reaches age 0) but carry no temporal detail, which is
+// fine -- live level lives on the meters at 25fps, not here.
+const EdgeSeconds = 10.0
 
 // signalByte is the level at or above which a bin counts as signal: the
 // -46 dBFS gate, which quantises to byte 60 (-45.9). It is arbitrary, and it

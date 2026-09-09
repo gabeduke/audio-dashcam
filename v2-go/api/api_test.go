@@ -271,8 +271,12 @@ func TestEnvelopeReportsRingAndBuffered(t *testing.T) {
 	if got := body["buffered_seconds"].(float64); got < 29.9 || got > 30.1 {
 		t.Errorf("buffered_seconds = %v, want ~30", got)
 	}
-	if got := body["edge_seconds"].(float64); got != 1 {
-		t.Errorf("edge_seconds = %v, want 1", got)
+	// Assert against the constant, not a literal: this test is here to prove the
+	// response carries the edge age the server bucketed on, so that the client
+	// can re-derive the same axis. The value itself is a tuning decision and
+	// moves — pinning it here would make tuning look like a regression.
+	if got := body["edge_seconds"].(float64); got != audio.EdgeSeconds {
+		t.Errorf("edge_seconds = %v, want %v (audio.EdgeSeconds)", got, audio.EdgeSeconds)
 	}
 }
 
