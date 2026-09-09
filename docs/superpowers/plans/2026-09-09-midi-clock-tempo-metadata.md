@@ -2783,6 +2783,16 @@ during execution" section is the pattern.
 
 ---
 
+## Corrections found during execution
+
+**Task 7 named one `api.New` call site in the tests; there are four.**
+`newTestAPI` at `api_test.go:26` is the one the plan spotted, but
+`handleEnvelope`'s helper at :244 and another at :369 construct the API
+directly, and both broke the build. The plan's instruction to update "the
+helper (every existing test calls it, so this one edit keeps them compiling)"
+was simply wrong about the file. Adding a parameter to a constructor means
+grepping for every call site, not trusting a helper to be the only one.
+
 ## Self-review against the spec
 
 | Spec requirement | Task |

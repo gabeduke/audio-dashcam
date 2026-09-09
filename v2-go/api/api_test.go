@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gabeduke/audio-dashcam/v2-go/audio"
@@ -16,13 +17,13 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// newTestAPI builds an API over a temp takes directory. Capture and Saver are
-// nil because the metadata handler never touches them; a test that needed
-// audio would have to run on hardware.
+// newTestAPI builds an API over a temp takes directory. Capture, Saver and the
+// MIDI source are nil because the metadata handler never touches them; a test
+// that needed audio would have to run on hardware.
 func newTestAPI(t *testing.T) (*mux.Router, string) {
 	t.Helper()
 	dir := t.TempDir()
-	a := New(&config.Config{OutputDir: dir}, nil, nil, nil)
+	a := New(&config.Config{OutputDir: dir}, nil, nil, nil, nil)
 	r := mux.NewRouter()
 	a.SetupRoutes(r)
 	return r, dir
@@ -240,7 +241,7 @@ func newEnvelopeAPI(t *testing.T, capBins, bins int) *mux.Router {
 	for i := 0; i < bins; i++ {
 		e.PushBin(audio.Bin{Min: []float32{-0.5}, Max: []float32{0.5}, RMS: []float32{0}})
 	}
-	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, e)
+	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, e, nil)
 	r := mux.NewRouter()
 	a.SetupRoutes(r)
 	return r
@@ -365,7 +366,7 @@ func TestEnvelopeRejectsNonNumericParams(t *testing.T) {
 }
 
 func TestEnvelopeWithoutAnEnvelopeIs503(t *testing.T) {
-	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, nil)
+	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, nil, nil)
 	r := mux.NewRouter()
 	a.SetupRoutes(r)
 
@@ -387,5 +388,80 @@ func TestTakeRouteRejectsOtherMethods(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405 for POST /api/take", w.Code)
+	}
+}
+
+// fakeMIDI stands in for midi.Reader.
+type fakeMIDI struct {
+	connected bool
+	bpm       float64
+	ok        bool
+}
+
+func (f *fakeMIDI) Connected() bool { return f.connected }
+func (f *fakeMIDI) BPM(start, end time.Time) (float64, bool) {
+	return f.bpm, f.ok
+}
+
+func newStatusAPI(t *testing.T, m MIDISource) *mux.Router {
+	t.Helper()
+	a := New(&config.Config{OutputDir: t.TempDir()}, nil, nil, nil, m)
+	r := mux.NewRouter()
+	// Only the MIDI half of the status response is exercised here; the rest
+	// needs a live Capture.
+	r.HandleFunc("/api/midi", func(w http.ResponseWriter, req *http.Request) {
+		conn, bpm := a.midiState()
+		writeJSON(w, http.StatusOK, map[string]any{"midi_connected": conn, "midi_bpm": bpm})
+	})
+	return r
+}
+
+func midiState(t *testing.T, m MIDISource) (bool, *float64) {
+	t.Helper()
+	r := newStatusAPI(t, m)
+	req := httptest.NewRequest(http.MethodGet, "/api/midi", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var got struct {
+		Connected bool     `json:"midi_connected"`
+		BPM       *float64 `json:"midi_bpm"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body %s)", err, w.Body.String())
+	}
+	return got.Connected, got.BPM
+}
+
+func TestStatusReportsLiveBPM(t *testing.T) {
+	conn, bpm := midiState(t, &fakeMIDI{connected: true, bpm: 129.87, ok: true})
+	if !conn {
+		t.Error("midi_connected = false, want true")
+	}
+	if bpm == nil || *bpm != 129.87 {
+		t.Errorf("midi_bpm = %v, want 129.87", bpm)
+	}
+}
+
+// Connected but silent is the exact shape of the failure worth catching: the
+// EP ships with clock-send off, and a run with it off is indistinguishable
+// from firmware that cannot send clock. null, not 0.
+func TestStatusReportsConnectedWithNoClockAsNull(t *testing.T) {
+	conn, bpm := midiState(t, &fakeMIDI{connected: true, ok: false})
+	if !conn {
+		t.Error("midi_connected = false, want true")
+	}
+	if bpm != nil {
+		t.Errorf("midi_bpm = %v, want null", *bpm)
+	}
+}
+
+func TestStatusWithNoMIDISourceIsNotConnected(t *testing.T) {
+	conn, bpm := midiState(t, nil)
+	if conn {
+		t.Error("midi_connected = true with no source, want false")
+	}
+	if bpm != nil {
+		t.Errorf("midi_bpm = %v, want null", *bpm)
 	}
 }

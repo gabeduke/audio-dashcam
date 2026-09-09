@@ -14,6 +14,7 @@ import (
 	"github.com/gabeduke/audio-dashcam/v2-go/api"
 	"github.com/gabeduke/audio-dashcam/v2-go/audio"
 	"github.com/gabeduke/audio-dashcam/v2-go/config"
+	"github.com/gabeduke/audio-dashcam/v2-go/midi"
 	"github.com/gorilla/mux"
 )
 
@@ -37,8 +38,17 @@ func main() {
 
 	saver := audio.NewSaver(cap)
 
+	// The clock ring covers the same window as the audio ring, so a full-ring
+	// save can still ask about its oldest end. Sized in pulses at the fastest
+	// tempo the BPM field accepts.
+	clock := midi.NewClock(midi.CapacityFor(cfg.RingSeconds))
+	reader := midi.NewReader(cfg.DeviceMatch, clock)
+	reader.Start()
+	defer reader.Stop()
+	saver.SetTempoSource(reader)
+
 	r := mux.NewRouter()
-	api.New(cfg, cap, saver, cap.Envelope()).SetupRoutes(r)
+	api.New(cfg, cap, saver, cap.Envelope(), reader).SetupRoutes(r)
 	r.PathPrefix("/").Handler(noCacheShell(http.FileServer(http.Dir(staticDir()))))
 
 	srv := &http.Server{

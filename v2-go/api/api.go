@@ -23,15 +23,45 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// MIDISource is the live clock, as the API needs it: is it there, and what is
+// it saying right now. Satisfied by *midi.Reader; nil is a valid value and
+// means this build has no clock.
+type MIDISource interface {
+	Connected() bool
+	BPM(start, end time.Time) (float64, bool)
+}
+
 type API struct {
 	cfg   *config.Config
 	cap   *audio.Capture
 	saver *audio.Saver
 	env   *audio.Envelope
+	midi  MIDISource
 }
 
-func New(cfg *config.Config, cap *audio.Capture, saver *audio.Saver, env *audio.Envelope) *API {
-	return &API{cfg: cfg, cap: cap, saver: saver, env: env}
+func New(cfg *config.Config, cap *audio.Capture, saver *audio.Saver, env *audio.Envelope, m MIDISource) *API {
+	return &API{cfg: cfg, cap: cap, saver: saver, env: env, midi: m}
+}
+
+// liveTempoWindow is how far back the status poll asks about. Eight seconds is
+// two quarter notes' worth down to about 15 BPM, so the reading survives any
+// tempo the field accepts, while staying short enough that the number moves
+// with the room rather than lagging it.
+const liveTempoWindow = 8 * time.Second
+
+// midiState reports the clock's presence and its current tempo. A nil BPM means
+// no defensible reading -- which is the shape that catches the EP's clock-send
+// being switched off, since that looks exactly like connected and silent.
+func (a *API) midiState() (bool, *float64) {
+	if a.midi == nil {
+		return false, nil
+	}
+	connected := a.midi.Connected()
+	now := time.Now()
+	if bpm, ok := a.midi.BPM(now.Add(-liveTempoWindow), now); ok {
+		return connected, &bpm
+	}
+	return connected, nil
 }
 
 func (a *API) SetupRoutes(r *mux.Router) {
@@ -74,10 +104,13 @@ type statusResponse struct {
 	DiskFreeGB      float64   `json:"disk_free_gb"`
 	DiskPercent     float64   `json:"disk_percent"`
 	MinFreeGB       float64   `json:"min_free_gb"`
+	MIDIConnected   bool      `json:"midi_connected"`
+	MIDIBPM         *float64  `json:"midi_bpm"`
 }
 
 func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 	free, pct := a.saver.FreeGB()
+	midiConnected, midiBPM := a.midiState()
 
 	// Report channels 1-indexed, matching the hardware labelling and the env var.
 	sc := make([]int, len(a.cfg.SaveChannels))
@@ -103,6 +136,8 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		DiskFreeGB:      free,
 		DiskPercent:     pct,
 		MinFreeGB:       a.cfg.MinFreeGB,
+		MIDIConnected:   midiConnected,
+		MIDIBPM:         midiBPM,
 	})
 }
 
