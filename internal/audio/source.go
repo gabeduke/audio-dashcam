@@ -19,7 +19,11 @@ type Source interface {
 	Close()
 
 	// Reset is called after a failed Open, before the next attempt. It is
-	// where a source re-enumerates hardware.
+	// where a source re-enumerates hardware. The caller guarantees nothing is
+	// live when it calls Reset -- it runs only after an Open that returned an
+	// error -- so an implementation may assume there is nothing to tear down
+	// first. That guarantee only holds if Open itself never leaves the source
+	// open on any of its error paths.
 	Reset() error
 
 	// Shutdown releases process-wide resources. Called once, from Stop.

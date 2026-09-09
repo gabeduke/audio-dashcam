@@ -9,10 +9,10 @@ import (
 	"github.com/gabeduke/hindsight/internal/config"
 )
 
-// blockPoolSize bounds how much audio can be in flight between the PortAudio
-// callback and the ring writer. At 2048 frames per block this is several
-// seconds of slack, which is what lets a large Snapshot hold the ring lock
-// without the callback ever blocking.
+// blockPoolSize bounds how much audio can be in flight between the source's
+// delivery goroutine and the ring writer. At 2048 frames per block this is
+// several seconds of slack, which is what lets a large Snapshot hold the ring
+// lock without the callback ever blocking.
 const blockPoolSize = 64
 
 // staleAfter is how long without a callback before capture is declared dead.
@@ -93,6 +93,10 @@ func (c *Capture) BufferedSeconds() float64 {
 
 // Start brings up the ring writer, the level broadcaster and the supervised
 // audio stream. It returns immediately; use Healthy to observe state.
+//
+// The error return is reserved for a future Source whose start-up can fail
+// synchronously; today every failure is discovered and retried inside
+// supervise, so this always returns nil.
 func (c *Capture) Start() error {
 	c.wg.Add(3)
 	go c.ringWriter()
@@ -201,8 +205,9 @@ func (c *Capture) supervise() {
 	}
 }
 
-// processAudio runs on the PortAudio thread. It must never block or allocate,
-// so it takes a pooled block, copies into it, and hands it off without waiting.
+// processAudio runs on the source's delivery goroutine (the sink passed to
+// Source.Open). It must never block or allocate, so it takes a pooled block,
+// copies into it, and hands it off without waiting.
 func (c *Capture) processAudio(in []int32) {
 	c.lastCallback.Store(time.Now().UnixNano())
 	c.levels.Accumulate(in)
