@@ -1,4 +1,4 @@
-// Offline shell for the dashcam UI.
+// Offline shell for the Hindsight UI.
 //
 // Only ever registered in a secure context (see app.js). Caching is a
 // convenience for the app shell — the recordings and the live stream come from
@@ -6,7 +6,11 @@
 
 // Bump this whenever SHELL changes: addAll is atomic, so a stale install
 // listing a file that no longer exists would fail to precache entirely.
-const CACHE = 'dashcam-shell-v3';
+//
+// Renamed from 'dashcam-shell-v3' along with the product: this deliberately
+// invalidates the old cache, so a phone with the old app shell installed
+// fetches the new one rather than keep serving a UI branded with the old name.
+const CACHE = 'hindsight-shell-v1';
 const SHELL = [
   '/',
   '/index.html',

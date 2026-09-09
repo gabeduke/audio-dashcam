@@ -1,4 +1,4 @@
-// Audio Dashcam — app entry.
+// Hindsight — app entry.
 
 import { connectLive } from '/lib/live.js';
 import { Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
