@@ -8,6 +8,11 @@ on:
     branches-ignore: [master]
   workflow_call:
 
+# Called from release.yml, this job would otherwise inherit that workflow's
+# contents: write just to run tests.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

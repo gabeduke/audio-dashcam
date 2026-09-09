@@ -7,6 +7,13 @@ on:
 permissions:
   contents: write
 
+# Two close merges would each build a full arm64 cgo binary and race to push;
+# the loser's push would fail and show as a red run for no real reason. Queue
+# them instead of cancelling either -- both merges still deserve a release.
+concurrency:
+  group: release-master
+  cancel-in-progress: false
+
 jobs:
   test:
     # Reused rather than duplicated, so a red master cannot publish.
@@ -24,7 +31,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update -qq
-          apt-get install -y build-essential portaudio19-dev git curl ca-certificates jq
+          apt-get install -y build-essential pkg-config portaudio19-dev git curl ca-certificates
 
       - uses: actions/checkout@v4
         with:
@@ -106,8 +113,12 @@ jobs:
           git add CHANGELOG.md
           git commit -m "Record $TAG in the changelog [skip ci]"
           git tag "$TAG"
-          git push origin HEAD:master
-          git push origin "$TAG"
+          # Atomic: a transient failure on just the tag push would otherwise
+          # leave master carrying a changelog entry for a release with no tag
+          # and no GitHub release, and since that commit carries [skip ci],
+          # nothing re-triggers -- and a re-run's checkout is by then behind
+          # master, so it can't push the same commit again either.
+          git push --atomic origin HEAD:master "refs/tags/$TAG"
 
       - name: Publish
         uses: softprops/action-gh-release@v2

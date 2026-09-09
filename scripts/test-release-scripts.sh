@@ -34,6 +34,10 @@ check "does not trip over a double-digit count" \
   "v2026.09.09.11" \
   "$(printf 'v2026.09.09.%s\n' 1 2 3 4 5 6 7 8 9 10 | "$HERE/next-tag.sh" 2026.09.09)"
 
+check "a gap from a deleted tag does not collide with an existing one" \
+  "v2026.09.09.4" \
+  "$(printf 'v2026.09.09.1\nv2026.09.09.3\n' | "$HERE/next-tag.sh" 2026.09.09)"
+
 # changelog-entry.sh renders a section from lines of "subject (sha)" on stdin.
 entry="$(printf -- '- Do a thing (abc1234)\n- Do another (def5678)\n' \
   | "$HERE/changelog-entry.sh" v2026.09.09.1 2026-09-09)"
@@ -45,5 +49,11 @@ case "$entry" in
   *"- Do another (def5678)"*) echo "ok   - entry carries every commit" ;;
   *) echo "FAIL - entry dropped a commit"; fail=1 ;;
 esac
+
+check "empty range falls back to No changes recorded" \
+  "## v2026.09.09.1 — 2026-09-09
+
+- No changes recorded." \
+  "$(printf '' | "$HERE/changelog-entry.sh" v2026.09.09.1 2026-09-09)"
 
 exit "$fail"

@@ -7,7 +7,10 @@ set -euo pipefail
 
 date="${1:?usage: next-tag.sh YYYY.MM.DD  (existing tags on stdin)}"
 
-# grep -c would count matches; grep then wc keeps an empty input at 0 without
-# tripping the pipeline's errexit on grep's exit status 1.
-n=$(grep -c "^v${date}\.[0-9][0-9]*$" || true)
-echo "v${date}.$((n + 1))"
+# The next tag is max(existing suffixes) + 1, not count + 1: a deleted tag
+# (the routine response to a bad release) leaves a gap, and count+1 would
+# recompute a name that already exists -- colliding for the rest of the UTC
+# day. `|| true` covers both an empty match set and grep's exit status 1 on
+# no match, so `n` is unset either way and `${n:-0}` supplies the 0.
+n=$(grep "^v${date}\.[0-9][0-9]*$" | sed 's/.*\.//' | sort -n | tail -1 || true)
+echo "v${date}.$(( ${n:-0} + 1 ))"
