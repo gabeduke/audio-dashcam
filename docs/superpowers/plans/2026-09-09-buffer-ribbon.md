@@ -27,6 +27,35 @@
 
 ---
 
+## Corrections found during execution
+
+Recorded rather than quietly patched, because all three are defects in *this
+plan* and each is easy to repeat.
+
+**Tasks 1 and 2 could not produce two working commits.** Task 1's tests read
+values back through `Buckets(1)[0]`, but `Buckets` is Task 2's deliverable — so
+four of Task 1's five tests depend on code Task 1 does not contain, and a
+commit at the end of Task 1 does not compile. Task 1's commit step is removed
+and the two now share one commit. The general lesson: **a task boundary is not
+real if the earlier task's tests can only observe behaviour through the later
+task's API.** Split by observable behaviour, not by file.
+
+**The `Buckets` code specified below held a lock the audio callback needs.** It
+held `Envelope.mu` across the whole aggregation — ~150 µs measured on an M1, an
+estimated 1–2 ms on the Pi — while `PushBin` wants that same mutex every 10 ms
+from the PortAudio callback thread. `audio/ring.go` had already established and
+documented the right pattern one file over: *take the mutex only long enough to
+memcpy a snapshot out, then do the work on your own copy.* The shipped code
+follows `Ring.Snapshot`. **The `Buckets` listing in Task 2 is left as
+originally written; read the committed source for its final shape.**
+
+**Tasks 6 and 7 left the app broken between commits.** Task 6 deleted the
+visualiser and nothing replaced it until Task 7, so the intermediate commit
+renders a dead panel — and Task 8 deploys to a live device. They are re-cut
+into three tasks (6, 7, 7b) so every commit leaves a working UI.
+
+---
+
 ## File structure
 
 | File | Responsibility |
@@ -284,20 +313,14 @@ func (e *Envelope) atLocked(n int) byte {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Do not run or commit yet — continue straight into Task 2**
 
-```bash
-cd v2-go && go test ./audio/ -run TestEnvelope -v
-```
+These tests cannot pass, or even compile, on their own: four of the five read
+values back through `Buckets(1)[0]`, and `Buckets` is Task 2's deliverable.
+That is a flaw in how this plan was cut, not something to work around.
 
-Expected: PASS. `TestEnvelopeBufferedGrowsThenSaturates` will still fail to compile until `Buckets` exists — if so, temporarily comment out the `Buckets` assertions in the other tests, or jump to Task 2 and run them together. Prefer the latter; do not commit a commented-out test.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add v2-go/audio/envelope.go v2-go/audio/envelope_test.go
-git commit -m "Add a retained level envelope for the buffer ribbon"
-```
+**Task 1 has no commit step.** Write Task 2's tests and implementation, then
+run and commit both tasks together as a single commit.
 
 ---
 
@@ -479,11 +502,14 @@ cd v2-go && go test ./audio/ -run 'TestBuckets|TestNewestBucket|TestEnvelope' -v
 
 Expected: PASS, all of Task 1's and Task 2's tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit both tasks together**
+
+One commit, not two — Task 1's tests depend on Task 2's code, so a commit
+between them would not compile:
 
 ```bash
 git add v2-go/audio/envelope.go v2-go/audio/envelope_test.go
-git commit -m "Aggregate the envelope into log-spaced buckets"
+git commit -m "Add a retained level envelope for the buffer ribbon"
 ```
 
 ---
@@ -930,6 +956,10 @@ Add the cap, the response type and the handler after `handlePeaks`:
 ```go
 // maxBuckets caps what a client can ask for. The ribbon wants about one bucket
 // per CSS pixel and the widest target is ~1246px, so this is generous.
+//
+// It is also the only upper bound on the work one request makes the envelope
+// do — Buckets clamps the low end but not the high end — so this is what stops
+// an unbounded ?buckets= from turning into an unbounded aggregation.
 const maxBuckets = 600
 
 type envelopeResponse struct {
@@ -1032,13 +1062,16 @@ git commit -m "Serve the buffer ribbon envelope over HTTP"
 
 ---
 
-### Task 6: Move `fmtDur` into `meter.js` and delete `Visualizer`
+### Task 6: Share `fmtDur` from `meter.js`
 
 **Files:**
-- Modify: `v2-go/static/lib/meter.js:27-219`
-- Modify: `v2-go/static/app.js:4`, `:98-113`, `:244`
+- Modify: `v2-go/static/lib/meter.js` (end of file)
+- Modify: `v2-go/static/app.js:4`, and the local `fmtDur` after `buildDurations`
 
-Pure refactor, no behaviour change. Doing it before the ribbon lands keeps the two diffs readable.
+Pure refactor, no behaviour change. **`Visualizer` is deliberately left alone
+here** — it is deleted in Task 7b, once the ribbon exists to replace it, so that
+no commit on this branch leaves the app with a dead panel. `ribbon.js` imports
+`fmtDur` from `meter.js`, which is why this move comes first.
 
 - [ ] **Step 1: Add `fmtDur` to `meter.js`**
 
@@ -1057,44 +1090,30 @@ export function fmtDur(s) {
 export { FLOOR_DB, dbToFrac };
 ```
 
-- [ ] **Step 2: Delete the `Visualizer` class**
+- [ ] **Step 2: Use it from `app.js`**
 
-Remove the whole `export class Visualizer { ... }` block from `v2-go/static/lib/meter.js` — it starts at the `export class Visualizer` line and ends at the closing brace before `/** Renders a row of DOM level meters and keeps them updated. */`. Also delete the now-unused `warp` helper above it and the file-header comment's three numbered points, which describe the canvas bugs that no longer exist. Replace that header with:
-
-```js
-// Level meters, plus the shared dB and duration formatting helpers.
-//
-// The scrolling canvas visualiser that used to live here was replaced by the
-// buffer ribbon (lib/ribbon.js): it could only ever show the ~9s that arrived
-// while the page was open, and a dashcam is something you open after the
-// moment.
-```
-
-Keep `FLOOR_DB`, `dbToFrac`, `Meters` and the new `fmtDur`.
-
-- [ ] **Step 3: Update `app.js`**
-
-Change the import at line 4:
+Change the import at line 4 — `Visualizer` stays in this list for now:
 
 ```js
-import { Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
+import { Visualizer, Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
 ```
 
-Delete the local `fmtDur` function (the one directly after `buildDurations`). Delete the `viz` declaration in the state block, the `viz?.setChannels(sel);` line in `applyStatus`, the `viz` entry in the `el` object (`viz: $('viz')`), and the `viz = new Visualizer(...)` line. In the `connectLive` callback, delete `viz.push(f);`.
+Then delete the local `fmtDur` function, the one directly after `buildDurations`. Change nothing else.
 
-- [ ] **Step 4: Verify nothing references the removed names**
+- [ ] **Step 3: Verify the app still works exactly as before**
 
 ```bash
-cd v2-go && grep -rn "Visualizer\|viz\.\|viz =\|\$('viz')" static/ || echo "clean"
+cd v2-go && grep -n "function fmtDur" static/app.js || echo "local copy gone"
+cd v2-go && grep -n "fmtDur" static/lib/meter.js
 ```
 
-Expected: `clean`. `el.vizWrap` and `$('viz-wrap')` must survive — the `.stale` toggle still uses them.
+Expected: the local copy is gone and `meter.js` exports it. Deploy with `./deploy.sh --static` and confirm the app looks and behaves identically — the visualiser still scrolls, the stats still read `15m`. This task is a no-op from the user's side; if anything changed, something is wrong.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add v2-go/static/lib/meter.js v2-go/static/app.js
-git commit -m "Retire the canvas visualiser and share fmtDur"
+git commit -m "Share fmtDur from meter.js"
 ```
 
 ---
@@ -1315,15 +1334,47 @@ export class Ribbon {
 }
 ```
 
-- [ ] **Step 2: Wire it into `app.js`**
+- [ ] **Step 2: Verify it parses**
 
-Add the import after the `meter.js` import:
+**Do not wire it into `app.js` yet** — that is Task 7b. This task adds one new
+file and imports it from nowhere, so the app is untouched and still running the
+old visualiser.
+
+```bash
+cd v2-go && node --input-type=module -e "$(cat static/lib/ribbon.js | sed "s#from '/lib/meter.js'#from './static/lib/meter.js'#")" 2>&1 | head -5 || true
+```
+
+Expected: no `SyntaxError`. A module-resolution complaint is fine; a syntax error is not. If `node` is unavailable, skip — Task 10 catches it in a real browser.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add v2-go/static/lib/ribbon.js
+git commit -m "Add the buffer ribbon component"
+```
+
+---
+
+### Task 7b: Swap the visualiser for the ribbon
+
+**Files:**
+- Modify: `v2-go/static/app.js`
+- Modify: `v2-go/static/lib/meter.js`
+
+This is the commit where the UI actually changes. It is one commit on purpose:
+the swap and the deletion have to land together, or an intermediate commit
+leaves the app with a dead panel — and Task 8 deploys to a live device.
+
+- [ ] **Step 1: Point `app.js` at the ribbon**
+
+Change the import at line 4 to drop `Visualizer`, and add the ribbon import after it:
 
 ```js
+import { Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
 import { Ribbon } from '/lib/ribbon.js';
 ```
 
-Add to the state block, where `viz` used to be:
+In the state block, replace `let viz = null;` with:
 
 ```js
 let ribbon = null;
@@ -1342,28 +1393,47 @@ Inside the button click handler in `buildDurations`, after the `aria-pressed` lo
       ribbon?.setSelected(selSeconds);
 ```
 
-Replace the old `viz = new Visualizer(...)` line under the `--- live ---` heading:
+Under the `--- live ---` heading, replace the `viz = new Visualizer(el.viz, { channels: [2, 3] });` line with:
 
 ```js
 ribbon = new Ribbon(el.vizWrap);
 ```
 
-**Order matters:** `ribbon` must be constructed before the first `pollStatus()` resolves, because `applyStatus` calls `buildDurations`. The existing `pollStatus()` call is at the bottom of the file, well after this line, so leaving it where `viz` was is correct — but the `?.` guards make a race harmless either way.
+Delete the `viz?.setChannels(sel);` line in `applyStatus`, the `viz: $('viz'),` entry in the `el` object, and `viz.push(f);` in the `connectLive` callback.
 
-- [ ] **Step 3: Verify it parses**
+**Order matters:** `ribbon` must be constructed before the first `pollStatus()` resolves, because `applyStatus` calls `buildDurations`. The existing `pollStatus()` call is at the bottom of the file, well after this line, so leaving it where `viz` was is correct — and the `?.` guards make a race harmless either way.
 
-```bash
-cd v2-go && node --input-type=module -e "$(cat static/lib/ribbon.js | sed "s#from '/lib/meter.js'#from './static/lib/meter.js'#")" 2>&1 | head -5 || true
+- [ ] **Step 2: Delete the `Visualizer` class**
+
+Remove the whole `export class Visualizer { ... }` block from `v2-go/static/lib/meter.js` — it starts at the `export class Visualizer` line and ends at the closing brace before `/** Renders a row of DOM level meters and keeps them updated. */`. Also delete the now-unused `warp` helper above it and the file-header comment's three numbered points, which describe canvas bugs that no longer exist. Replace that header with:
+
+```js
+// Level meters, plus the shared dB and duration formatting helpers.
+//
+// The scrolling canvas visualiser that used to live here was replaced by the
+// buffer ribbon (lib/ribbon.js): it could only ever show the ~9s that arrived
+// while the page was open, and a dashcam is something you open after the
+// moment.
 ```
 
-Expected: no `SyntaxError`. A module-resolution complaint is fine; a syntax error is not. If `node` is unavailable, skip — Task 10 catches it in a real browser.
+Keep `FLOOR_DB`, `dbToFrac`, `Meters` and `fmtDur`.
+
+- [ ] **Step 3: Verify nothing references the removed names**
+
+```bash
+cd v2-go && grep -rn "Visualizer\|viz\.\|viz =\|\$('viz')" static/ || echo "clean"
+```
+
+Expected: `clean`. `el.vizWrap` and `$('viz-wrap')` must survive — the `.stale` toggle still uses them.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add v2-go/static/lib/ribbon.js v2-go/static/app.js
-git commit -m "Add the buffer ribbon component"
+git add v2-go/static/lib/meter.js v2-go/static/app.js
+git commit -m "Swap the canvas visualiser for the buffer ribbon"
 ```
+
+At this point the ribbon renders into the old `.viz-wrap` slot, still inside the monitor panel. Task 8 moves it out and gives it the full width.
 
 ---
 
@@ -1729,10 +1799,12 @@ Expected: `xruns: 0` and `capture_healthy: true`. The envelope adds 88 KiB and o
 
 ## Self-review
 
-**Spec coverage.** Every section of the spec maps to a task: retention → 1, bucketing → 2, signal counting → 3, wiring → 4, the endpoint → 5, `Visualizer` deletion → 6, the component and readout → 7, layout/hatch/stale → 8, the service-worker rule → 9, viewport verification → 10, hardware states → 11. The three "honest gaps" in the spec are not tasks because they are accepted limits, but Task 11 Step 8 asks for the far-left one to be re-checked once real data reaches it.
+**Spec coverage.** Every section of the spec maps to a task: retention → 1, bucketing → 2 (committed together with 1), signal counting → 3, wiring → 4, the endpoint → 5, `fmtDur` sharing → 6, the component and readout → 7, the swap and `Visualizer` deletion → 7b, layout/hatch/stale → 8, the service-worker rule → 9, viewport verification → 10, hardware states → 11. The three "honest gaps" in the spec are not tasks because they are accepted limits, but Task 11 Step 8 asks for the far-left one to be re-checked once real data reaches it.
 
 **Deviations,** all three listed at the top and amended into the spec: base64 buckets, the newest bucket reaching age 0, and the `z-index` rationale.
 
 **Names used consistently across tasks:** `NewEnvelope(capBins, saveChannels, binMillis)`, `PushBin`, `Buckets(n)`, `SignalSeconds(span)`, `BufferedSeconds()`, `RingSeconds()`, `EdgeSeconds`, `signalByte`, `codeDB`, `Levels.SetEnvelope`, `Capture.Envelope()`, `api.New(cfg, cap, saver, env)`, `Ribbon.setSpans/setSelected/poll/render`, `fmtDur`. CSS classes are all `rb-*` except the existing `.viz-wrap`.
 
-**Known sharp edge:** Task 1's `TestEnvelopeBufferedGrowsThenSaturates` and the coding tests call `Buckets`, which does not exist until Task 2. Task 1 Step 4 says to run Tasks 1 and 2 together rather than commit a commented-out test. That is deliberate — splitting them differently would mean writing the ring twice.
+**Known sharp edge:** Task 1's tests call `Buckets`, which does not exist until Task 2, so the two share a single commit. This was originally written as two commits and produced one that did not compile — see "Corrections found during execution" at the top.
+
+**Every commit leaves working software.** Go tasks (1+2, 3, 4, 5) each keep `go test ./...` green. UI tasks are ordered so the app is never mid-swap: 6 shares `fmtDur` with the visualiser still running, 7 adds an unreferenced file, 7b performs the swap and the deletion together, 8 moves it and 9 precaches it. Check this property holds for any task you re-cut.
