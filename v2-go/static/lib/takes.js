@@ -8,6 +8,7 @@
 // pauses outright while something is playing.
 
 import WaveSurfer from '/vendor/wavesurfer.esm.js';
+import { ampToFrac } from '/lib/meter.js';
 
 const fmtTime = (s) => {
   if (!isFinite(s) || s <= 0) return '0:00';
@@ -298,10 +299,22 @@ export class TakesList {
     row.waveEl.classList.remove('pending');
     row.waveEl.textContent = '';
 
+    // Recode to the dB scale the meters and the ribbon use. The stored peaks
+    // are linear amplitude, and this was the only level display in the app
+    // still drawing them that way -- a MAIN-bus take at -25 dBFS rendered as a
+    // one-pixel band here while the same signal filled 57% of the ribbon.
+    //
+    // Display-only, so peaks.json stays linear for trim and offline analysis,
+    // and every take already on disk renders correctly without regeneration.
+    // normalize stays false on purpose: the point is an absolute scale, so two
+    // takes at the same level look the same. Normalising would make a whisper
+    // and a full band identical.
+    const shaped = peaks.data.map((chan) => Float32Array.from(chan, ampToFrac));
+
     const ws = WaveSurfer.create({
       container: row.waveEl,
       media: audio,
-      peaks: peaks.data,
+      peaks: shaped,
       duration: peaks.duration || t.duration_seconds,
       height: 48,
       waveColor: '#2c5f52',
