@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,17 @@ var ErrLowDisk = errors.New("insufficient disk space")
 // ErrNoAudio is returned when the ring has nothing in it yet.
 var ErrNoAudio = errors.New("no audio buffered yet")
 
+// TempoSource reports the tempo over a wall-clock interval, or false when
+// there is no defensible reading.
+//
+// It is an interface, and audio does not import the midi package, so that a
+// MIDI failure has no path into the capture thread and this package -- which is
+// cgo and PortAudio -- keeps no knowledge of MIDI at all. The implementation is
+// midi.Reader; the tests use a fake.
+type TempoSource interface {
+	BPM(start, end time.Time) (float64, bool)
+}
+
 // Saver turns a slice of the ring into a take on disk, plus a preview and
 // waveform peaks.
 type Saver struct {
@@ -31,9 +43,24 @@ type Saver struct {
 	mu        sync.Mutex
 	lastSaved string
 	saving    bool
+	tempo     TempoSource
 }
 
 func NewSaver(c *Capture) *Saver { return &Saver{cap: c} }
+
+// SetTempoSource attaches a clock. Nil, or never called, means takes carry no
+// BPM -- which is the correct behaviour on a machine with no MIDI at all.
+func (s *Saver) SetTempoSource(t TempoSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tempo = t
+}
+
+func (s *Saver) tempoSource() TempoSource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tempo
+}
 
 func (s *Saver) LastSaved() string {
 	s.mu.Lock()
@@ -71,6 +98,16 @@ func (s *Saver) Save(seconds float64) (string, error) {
 		frames = int(seconds * float64(cfg.SampleRate))
 	}
 	data, gotFrames := s.cap.Ring().Snapshot(frames)
+	// The end of the captured window, in wall-clock terms. The ring stores
+	// frames and a counter and carries no clock of its own, so this is derived
+	// rather than read: now, minus the snapshot's duration.
+	//
+	// It runs late by the capture pipeline's latency -- INPUT_LATENCY_MS plus
+	// one FRAMES_PER_BUFFER block plus the hand-off, so 150-250ms. Against a
+	// 30-second window that is under 1%, and the tempo is a median over the
+	// whole window rather than a value placed at an instant. Frame-exact
+	// alignment is the scrubber's problem, not this one's.
+	capturedAt := time.Now()
 	if gotFrames == 0 {
 		return "", ErrNoAudio
 	}
@@ -103,6 +140,9 @@ func (s *Saver) Save(seconds float64) (string, error) {
 		log.Printf("[!] peaks for %s: %v", name, err)
 	}
 
+	stampTempo(wavPath, s.tempoSource(), capturedAt,
+		time.Duration(float64(gotFrames)/float64(cfg.SampleRate)*float64(time.Second)))
+
 	s.mu.Lock()
 	s.lastSaved = name
 	s.mu.Unlock()
@@ -111,6 +151,40 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	go s.prune()
 
 	return name, nil
+}
+
+// stampTempo merges a BPM into a take's sidecar, if the clock has one to give.
+//
+// The spec's hard rule is that a save must never fail because of MIDI: no
+// device, no clock, a parse error, an unplugged interface, or an implementation
+// that panics all produce a take with no BPM and nothing else. The recover is
+// not defensive habit -- it is the only thing standing between a third-party
+// bug and a lost recording, and by this point the WAV is already safely on disk.
+func stampTempo(wavPath string, src TempoSource, end time.Time, window time.Duration) {
+	if src == nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("[!] midi: tempo source panicked for %s: %v", filepath.Base(wavPath), p)
+		}
+	}()
+
+	bpm, ok := src.BPM(end.Add(-window), end)
+	if !ok {
+		return
+	}
+	// Two decimals: the estimator's precision is not meaningful past that, and
+	// the field is a starting point the owner edits, not a measurement.
+	bpm = math.Round(bpm*100) / 100
+
+	m := ReadMeta(wavPath)
+	m.BPM = &bpm
+	if err := WriteMeta(wavPath, m); err != nil {
+		log.Printf("[!] midi: bpm for %s: %v", filepath.Base(wavPath), err)
+		return
+	}
+	log.Printf("[*] %s — %.2f BPM", filepath.Base(wavPath), bpm)
 }
 
 // makePreview renders the mp3 proxy. The channel mapping is explicit: a bare
@@ -181,9 +255,10 @@ type Take struct {
 
 	// From the sidecar. Name above is the filename; Label is what the user
 	// called it.
-	Label   string `json:"label"`
-	Starred bool   `json:"starred"`
-	Trim    *Trim  `json:"trim,omitempty"`
+	Label   string   `json:"label"`
+	Starred bool     `json:"starred"`
+	Trim    *Trim    `json:"trim,omitempty"`
+	BPM     *float64 `json:"bpm,omitempty"`
 }
 
 // ListTakes returns starred takes first, then the rest newest first. Duration
@@ -224,6 +299,7 @@ func ListTakes(dir string) ([]Take, error) {
 		t.Label = m.Label
 		t.Starred = m.Starred
 		t.Trim = m.Trim
+		t.BPM = m.BPM
 
 		out = append(out, t)
 	}
