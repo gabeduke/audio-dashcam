@@ -33,3 +33,6 @@ design/buffer-ribbon.html
 
 # Harness-managed worktrees
 .claude/worktrees/
+
+# SDD controller workspace — ledger, briefs, review packages
+/.superpowers/
