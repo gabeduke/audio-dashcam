@@ -1,0 +1,16 @@
+[Unit]
+Description=Hindsight — always-listening audio buffer
+Documentation=https://github.com/gabeduke/hindsight
+After=sound.target network.target
+
+[Service]
+Type=simple
+# Leading "-" so a missing file is not a startup failure: every value in it
+# is optional and the binary has defaults for all of them.
+EnvironmentFile=-%h/hindsight/hindsight.env
+ExecStart=%h/hindsight/bin/hindsight
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
