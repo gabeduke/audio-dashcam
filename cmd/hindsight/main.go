@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gabeduke/audio-dashcam/v2-go/api"
-	"github.com/gabeduke/audio-dashcam/v2-go/audio"
-	"github.com/gabeduke/audio-dashcam/v2-go/config"
-	"github.com/gabeduke/audio-dashcam/v2-go/midi"
+	"github.com/gabeduke/hindsight/internal/api"
+	"github.com/gabeduke/hindsight/internal/audio"
+	"github.com/gabeduke/hindsight/internal/config"
+	"github.com/gabeduke/hindsight/internal/midi"
 	"github.com/gorilla/mux"
 )
 

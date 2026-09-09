@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gabeduke/audio-dashcam/v2-go/config"
+	"github.com/gabeduke/hindsight/internal/config"
 	"github.com/gordonklaus/portaudio"
 )
 

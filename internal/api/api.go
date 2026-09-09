@@ -19,8 +19,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/gabeduke/audio-dashcam/v2-go/audio"
-	"github.com/gabeduke/audio-dashcam/v2-go/config"
+	"github.com/gabeduke/hindsight/internal/audio"
+	"github.com/gabeduke/hindsight/internal/config"
 	"github.com/gorilla/mux"
 )
 

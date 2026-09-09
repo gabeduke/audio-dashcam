@@ -1,4 +1,4 @@
-module github.com/gabeduke/audio-dashcam/v2-go
+module github.com/gabeduke/hindsight
 
 go 1.23.0
 
