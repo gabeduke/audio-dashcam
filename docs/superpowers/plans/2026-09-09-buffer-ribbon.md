@@ -1341,10 +1341,12 @@ file and imports it from nowhere, so the app is untouched and still running the
 old visualiser.
 
 ```bash
-cd v2-go && node --input-type=module -e "$(cat static/lib/ribbon.js | sed "s#from '/lib/meter.js'#from './static/lib/meter.js'#")" 2>&1 | head -5 || true
+cd v2-go && node --check static/lib/ribbon.js && echo "SYNTAX OK"
 ```
 
-Expected: no `SyntaxError`. A module-resolution complaint is fine; a syntax error is not. If `node` is unavailable, skip — Task 10 catches it in a real browser.
+Expected: `SYNTAX OK`. This only checks that the file parses; the import path is not resolved, which is fine — Task 10 exercises it in a real browser.
+
+Do **not** use the `node --input-type=module -e "$(cat …)"` form. Building a program by command substitution is refused outright by the sandbox a worktree-isolated agent runs under, and `node --check` gives the same guarantee.
 
 - [ ] **Step 3: Commit**
 
@@ -1440,8 +1442,12 @@ At this point the ribbon renders into the old `.viz-wrap` slot, still inside the
 ### Task 8: Markup, layout and styles
 
 **Files:**
-- Modify: `v2-go/static/index.html:57-63`
+- Modify: `v2-go/static/index.html` — the `.viz-wrap` block, around lines 46-55
 - Modify: `v2-go/static/styles.css:125-146`, `:459-478`, `:509-530`
+
+Match the quoted "before" snippets rather than the line numbers: line references
+drift as earlier tasks land, and the `index.html` numbers in an earlier draft of
+this plan were already stale by the time Task 8 ran.
 
 - [ ] **Step 1: Move `.viz-wrap` out of the monitor panel**
 
