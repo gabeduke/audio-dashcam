@@ -6,7 +6,7 @@
 
 // Bump this whenever SHELL changes: addAll is atomic, so a stale install
 // listing a file that no longer exists would fail to precache entirely.
-const CACHE = 'dashcam-shell-v2';
+const CACHE = 'dashcam-shell-v3';
 const SHELL = [
   '/',
   '/index.html',
@@ -14,6 +14,7 @@ const SHELL = [
   '/app.js',
   '/lib/live.js',
   '/lib/meter.js',
+  '/lib/ribbon.js',
   '/lib/takes.js',
   '/lib/wakelock.js',
   '/vendor/wavesurfer.esm.js',
