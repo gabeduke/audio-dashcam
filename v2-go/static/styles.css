@@ -413,6 +413,38 @@ main {
   white-space: nowrap; flex: none;
 }
 
+/* The tempo reads as the first item of the meta line -- "129.9 bpm · 0:30 ·
+   12.4 MB" -- rather than as a separate control, so it costs no new row and no
+   new visual weight. It is a smaller tap target than --tap, matching
+   .take-name's own padding; see the open item in STATE.md. */
+.take-bpm {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 8px 2px 8px 6px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.take-bpm::after { content: ' ·'; }
+.take-bpm.unset { color: var(--ink-dim); opacity: .7; }
+.take-bpm:hover { color: var(--ink); }
+
+.take-bpm-input {
+  flex: none;
+  width: 5.5em;
+  min-width: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 4px 6px;
+  font-family: var(--mono); font-size: 12px;
+  color: var(--ink);
+}
+.take-bpm-input:focus { outline: none; }
+
 .wave { height: 48px; margin-bottom: 9px; }
 .wave.pending {
   display: grid; place-items: center;

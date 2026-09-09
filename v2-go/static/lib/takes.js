@@ -111,7 +111,7 @@ export class TakesList {
       // never confirmed. The move is deferred to endEdit instead.
       const at = this.container.children[i];
       if (at !== row.el) {
-        if (row.editing) this.reorderDeferred = true;
+        if (row.editing || row.editingBpm) this.reorderDeferred = true;
         else this.container.insertBefore(row.el, at ?? null);
       }
     });
@@ -135,6 +135,8 @@ export class TakesList {
         <button class="star" type="button" aria-pressed="false" aria-label="Star this take">★</button>
         <button class="take-name" type="button" title="Rename"></button>
         <input class="take-name-input" type="text" maxlength="120" hidden>
+        <button class="take-bpm" type="button" title="Set the tempo"></button>
+        <input class="take-bpm-input" type="text" inputmode="decimal" maxlength="7" hidden>
         <span class="take-meta"></span>
       </div>
       <div class="wave pending">waveform pending…</div>
@@ -150,6 +152,9 @@ export class TakesList {
       nameEl: el.querySelector('.take-name'),
       nameInput: el.querySelector('.take-name-input'),
       starBtn: el.querySelector('.star'),
+      bpmEl: el.querySelector('.take-bpm'),
+      bpmInput: el.querySelector('.take-bpm-input'),
+      editingBpm: false,
       editing: false,
       metaEl: el.querySelector('.take-meta'),
       waveEl: el.querySelector('.wave'),
@@ -226,6 +231,53 @@ export class TakesList {
       }
     });
 
+    const beginBpmEdit = () => {
+      row.editingBpm = true;
+      row.bpmInput.value = row.data.bpm == null ? '' : String(row.data.bpm);
+      row.bpmInput.placeholder = 'bpm';
+      row.bpmEl.hidden = true;
+      row.bpmInput.hidden = false;
+      row.bpmInput.focus();
+      row.bpmInput.select();
+    };
+
+    const endBpmEdit = async (commit) => {
+      if (!row.editingBpm) return;
+      row.editingBpm = false;
+      row.bpmInput.hidden = true;
+      row.bpmEl.hidden = false;
+      if (!commit) return;
+
+      const raw = row.bpmInput.value.trim();
+      // Empty clears the field. null is what the server reads as "clear";
+      // sending 0 would store a tempo no take can have.
+      const next = raw === '' ? null : Number(raw);
+      if (next !== null && !Number.isFinite(next)) {
+        this.onToast?.('Tempo must be a number', 'bad');
+        return;
+      }
+      const before = row.data.bpm ?? null;
+      if (next === before) return;
+
+      try {
+        await this.patchTake(row.name, { bpm: next });
+      } catch (err) {
+        this.onToast?.(`Could not set tempo: ${err.message}`, 'bad');
+      }
+    };
+
+    row.bpmEl.addEventListener('click', beginBpmEdit);
+    row.bpmInput.addEventListener('blur', () => endBpmEdit(true));
+    row.bpmInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        row.bpmInput.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        endBpmEdit(false);
+      }
+    });
+
     if (this.fresh === t.name) {
       el.classList.add('fresh');
       this.fresh = null;
@@ -247,6 +299,12 @@ export class TakesList {
       const stamp = t.name.replace(/^jam_|\.wav$/g, '');
       row.nameEl.textContent = t.label || stamp;
       row.nameEl.classList.toggle('unlabelled', !t.label);
+    }
+    // Skip while the user is mid-edit so a poll cannot overwrite what they are
+    // typing -- the same reason the label is guarded above.
+    if (!row.editingBpm) {
+      row.bpmEl.textContent = t.bpm == null ? '+ bpm' : `${t.bpm.toFixed(1)} bpm`;
+      row.bpmEl.classList.toggle('unset', t.bpm == null);
     }
     row.metaEl.textContent = `${fmtTime(t.duration_seconds)} · ${fmtSize(t.size_mb)}`;
     row.dlEl.href = `/api/download?file=${encodeURIComponent(t.name)}&dl=1`;
