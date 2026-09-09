@@ -54,6 +54,42 @@ visualiser and nothing replaced it until Task 7, so the intermediate commit
 renders a dead panel — and Task 8 deploys to a live device. They are re-cut
 into three tasks (6, 7, 7b) so every commit leaves a working UI.
 
+**Task 3's `SignalSeconds` called a helper that no longer exists, and carried
+the same lock bug.** It was written against Task 1's original draft of
+`Buckets`, which used an `atLocked` accessor. The shipped `Buckets` replaced
+that with snapshot-then-aggregate, so `atLocked` was gone — and restoring it to
+make Task 3 compile reintroduced a lock-held scan of up to 90,000 bins, called
+once per span, four times per poll, at 1 Hz, on the mutex the audio callback
+needs every 10 ms. `SignalSeconds` now copies only the newest `bins` bytes
+under the lock and counts on the copy: worst-case lock hold went from 139 µs to
+2.3 µs. **The lesson is that fixing one method left a second copy of the same
+bug elsewhere in the plan.** When a review changes a pattern, grep the whole
+plan for the old one.
+
+**Task 7's `readoutText` could assert SILENT from a stale response.** `poll()`
+built its query from `this.spans` at call time while `readoutText` indexed
+`signal_seconds` by `this.spans` at render time, with nothing tying them
+together — and the ribbon is constructed before the first status poll, so the
+first request goes out with an empty spans list. Both interleavings produced a
+false `SILENT, this would save nothing` (one of them rendered as `last nulls`)
+on essentially every page load. The response's spans are now carried alongside
+its data.
+
+Underneath that was a design error worth stating on its own: **unknown
+degraded to the loudest possible claim.** `?? 0` turned every unknown — index
+not found, field absent, short array — into zero, which tripped the SILENT
+branch. SILENT is the only line in this UI that stops someone pressing a
+button, so it has to earn that with positive evidence; unknown now reads as a
+plain span.
+
+**The 7b/8 split does not actually deliver the invariant it claims.** Task 7b
+swaps in the ribbon but every `.rb-*` rule lands in Task 8, so the commit
+between them renders unpositioned divs and an unsized SVG inside a clipped
+132px box — worse than the dead panel the split existed to prevent. **Task 8's
+CSS step belongs in Task 7b**, leaving Task 8 as markup and breakpoints only.
+Not re-cut on this branch because no device saw the intermediate state and the
+merged result is correct, but a future plan should get this boundary right.
+
 ---
 
 ## File structure
