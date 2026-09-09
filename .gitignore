@@ -27,3 +27,6 @@ deploy.local.env
 
 # Session working notes — local only (carries home network details)
 STATE.md
+
+# Seeded design canvas output; re-seeded from design/*.dc.html
+design/buffer-ribbon.html

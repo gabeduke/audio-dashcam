@@ -1,0 +1,169 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    :root {
+      --bg:#0b1120; --panel:#131c2e; --panel-2:#1a2437; --line:#26324a;
+      --ink:#eef2f8; --ink-dim:#8b9ab4; --ink-faint:#5d6b85;
+      --accent:#34d399; --warn:#fbbf24;
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+              "Helvetica Neue", Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+              "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+           font-family:var(--font); font-size:16px; line-height:1.45; }
+    a { color:#34d399; } a:hover { color:#6ee7b7; }
+  </style>
+</helmet>
+
+<div style="width: 390px; min-height: 844px; background: var(--bg); font-family: var(--font);">
+  <div style="display: flex; flex-direction: column; gap: 14px; padding: 14px 12px 40px;">
+
+    <section style="background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px;">
+      <h2 style="margin: 0 0 12px; font-size: 13px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-dim);">Capture</h2>
+
+      <!-- ribbon and buttons as ONE control block: the ribbon is the lid of
+           the segmented control rather than a separate element above it. -->
+      <div style="background: var(--panel-2); border-radius: 11px; padding: 4px;">
+
+        <div style="position: relative; height: 52px; background: #060b16; border-radius: 8px; overflow: hidden;">
+          <sc-for list="{{bands}}" as="b" hint-placeholder-count="4">
+            <div style="position:absolute; top:0; bottom:0; left: {{b.left}}%; width: {{b.width}}%; background: {{b.fill}}; border-left: 1px solid {{b.edge}};"></div>
+          </sc-for>
+
+          <svg viewBox="{{viewBox}}" preserveAspectRatio="none" style="position:absolute; inset:0; width:100%; height:100%; display:block;">
+            <path d="{{wavePath}}" fill="{{waveFill}}"></path>
+          </svg>
+
+          <sc-for list="{{marks}}" as="m" hint-placeholder-count="4">
+            <div style="position:absolute; top:0; bottom:0; left: {{m.left}}%; width:1px; background: {{m.color}};"></div>
+          </sc-for>
+
+          <sc-for list="{{marks}}" as="m" hint-placeholder-count="4">
+            <span style="position:absolute; bottom:2px; left: {{m.left}}%; transform: {{m.shift}}; padding: 0 3px; font-family: var(--mono); font-size: 9px; letter-spacing: .05em; color: {{m.color}}; white-space: nowrap;">{{m.label}}</span>
+          </sc-for>
+
+          <div style="position:absolute; top:0; bottom:0; right:0; width:2px; background: var(--accent);"></div>
+        </div>
+
+        <div style="display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; margin-top: 4px;">
+          <sc-for list="{{opts}}" as="o" hint-placeholder-count="4">
+            <button type="button" onClick="{{o.pick}}" style="appearance:none; border:0; background: {{o.bg}}; color: {{o.fg}}; font-family: var(--mono); font-size: 13px; font-weight: 600; min-height: 40px; border-radius: 8px; cursor: pointer;">{{o.label}}</button>
+          </sc-for>
+        </div>
+      </div>
+
+      <button type="button" style="margin-top: 12px; width: 100%; min-height: 58px; border: 0; border-radius: 12px; background: var(--accent); color: #062015; font-family: var(--font); font-size: 17px; font-weight: 750; letter-spacing: .04em; cursor: pointer;">Capture</button>
+
+      <p style="margin: 10px 0 0; text-align: center; font-family: var(--mono); font-size: 12px; color: var(--ink-faint);">last saved <span style="color: var(--ink-dim);">none</span></p>
+    </section>
+
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{
+  "demoSpeed": {"editor":"range","default":14,"min":0,"max":40,"step":1,"unit":"x","section":"Demo"},
+  "ringMinutes": {"editor":"int","default":15,"min":2,"max":30,"unit":"min","section":"Demo"},
+  "$preview": {"width":390,"height":844}
+}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    this.start = Date.now();
+    this.timer = setInterval(() => this.forceUpdate(), 140);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  hash(i) { const s = Math.sin(i * 127.1) * 43758.5453; return s - Math.floor(s); }
+  smooth(t, scale) {
+    const x = t / scale, i = Math.floor(x), f = x - i;
+    const a = this.hash(i), b = this.hash(i + 1);
+    return a + (b - a) * (f * f * (3 - 2 * f));
+  }
+  env(t) {
+    if (t < 0) return 0;
+    const macro = this.smooth(t, 31);
+    const micro = this.smooth(t, 0.55);
+    let v = Math.pow(macro, 1.9) * (0.30 + 0.70 * micro);
+    if (t > this.burstA && t < this.burstB) {
+      const edge = Math.min(1, Math.min(t - this.burstA, this.burstB - t) / 6);
+      v = Math.max(v, edge * (0.55 + 0.45 * micro));
+    }
+    return Math.min(1, v * 1.45);
+  }
+
+  renderVals() {
+    const T = Math.max(60, (this.props.ringMinutes ?? 15) * 60);
+    const speed = this.props.demoSpeed ?? 14;
+    const elapsed = ((Date.now() - (this.start ?? Date.now())) / 1000) * speed;
+    const now = 600 + elapsed;
+    if (this.burstA === undefined) { this.burstA = 600 - 96; this.burstB = 600 - 9; }
+
+    const AMIN = 1;
+    const span = Math.log(T / AMIN);
+    const fromRight = (age) => Math.log(Math.max(age, AMIN) / AMIN) / span;
+    const leftPct = (age) => (1 - fromRight(age)) * 100;
+
+    const N = 150, W = 338, H = 52, mid = H / 2;
+    const top = [], bot = [];
+    for (let i = 0; i <= N; i++) {
+      const x = i / N;
+      const age = AMIN * Math.pow(T / AMIN, 1 - x);
+      const a = this.env(now - age) * (mid - 2);
+      top.push((x * W).toFixed(1) + ',' + (mid - a).toFixed(1));
+      bot.push((x * W).toFixed(1) + ',' + (mid + a).toFixed(1));
+    }
+    const wavePath = 'M' + top.join(' L') + ' L' + bot.reverse().join(' L') + ' Z';
+
+    const picked = this.state?.picked ?? 30;
+    const stops = [
+      { label: '30s', s: 30 },
+      { label: '2m', s: 120 },
+      { label: '7m', s: 420 },
+      { label: 'Full', s: T },
+    ].filter((o) => o.s <= T);
+
+    const bands = stops.map((o) => {
+      const l = leftPct(o.s);
+      const on = o.s === picked;
+      return {
+        left: l.toFixed(2), width: (100 - l).toFixed(2),
+        fill: on ? 'rgba(52,211,153,0.13)' : 'transparent',
+        edge: on ? 'rgba(52,211,153,0.55)' : 'transparent',
+      };
+    });
+
+    const marks = stops.map((o, i) => ({
+      label: o.label === 'Full' ? this.fmt(T) : o.label,
+      left: leftPct(o.s).toFixed(2),
+      color: o.s === picked ? '#34d399' : '#5d6b85',
+      shift: i === stops.length - 1 ? 'translateX(0)' : 'translateX(-50%)',
+    }));
+
+    const opts = stops.map((o) => ({
+      label: o.label === 'Full' ? 'Full ' + this.fmt(T) : o.label,
+      bg: o.s === picked ? 'var(--panel)' : 'transparent',
+      fg: o.s === picked ? 'var(--accent)' : 'var(--ink-dim)',
+      pick: () => this.setState({ picked: o.s }),
+    }));
+
+    return {
+      wavePath, bands, marks, opts,
+      viewBox: '0 0 ' + W + ' ' + H,
+      waveFill: 'rgba(52,211,153,0.72)',
+    };
+  }
+
+  fmt(s) { return s >= 60 ? (s / 60) + 'm' : s + 's'; }
+}
+</script>
+</body>
+</html>

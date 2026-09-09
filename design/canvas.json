@@ -1,0 +1,84 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Chosen"
+    },
+    {
+      "id": "page-2",
+      "name": "Alternatives"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Buffer ribbon \u2014 in the monitor panel",
+      "is_interactive": true,
+      "page": "page-1"
+    },
+    {
+      "file": "Tablet.dc.html",
+      "x": 470,
+      "y": 0,
+      "w": 1280,
+      "h": 800,
+      "title": "Docked tablet \u2014 ribbon spans both columns",
+      "is_interactive": true,
+      "page": "page-1"
+    },
+    {
+      "file": "RibbonAbove.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "A \u2014 Ribbon above the buttons",
+      "is_interactive": true,
+      "page": "page-2"
+    },
+    {
+      "file": "Compact.dc.html",
+      "x": 510,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "B \u2014 Fused into the button block",
+      "is_interactive": true,
+      "page": "page-2"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "chosen-note",
+      "x": 0,
+      "y": -330,
+      "w": 760,
+      "page": "page-1",
+      "text": "REAL 15-MINUTE RING. jam_2026-09-08_233045.wav straight off the Pi \u2014 45000 bins at 20ms, age mapped directly onto the file. Every passage sits where it actually happened, at its real length, with the real silence between. Nothing is arranged.\n\nWhat is actually in your buffer:\n  204s ago   a 20s passage\n  166s ago   a 54s passage\n  108s ago   a 38s passage\n  nothing newer than 60s, nothing older than 270s\n\nOnly 15.6% of the ring has signal \u2014 which is what a dashcam buffer really looks like."
+    },
+    {
+      "id": "open-questions",
+      "x": 800,
+      "y": -330,
+      "w": 760,
+      "page": "page-1",
+      "text": "TAP 30s FIRST. The readout says SILENT \u2014 this would save nothing. Everything you played is more than a minute old, so the default option would have captured an empty file, and today there is no way to know that before pressing it. Then tap 7m and watch it turn into '112s of signal'.\n\nThat is the entire argument for this feature, and it came out of your buffer rather than a designed example.\n\nHonest gap: nothing in this capture is older than 270s, so the compressed far left (7m-15m) is empty here and this run does NOT test it. That region is still only defensible on the s/px numbers.\n\ndemoSpeed now defaults to 0 because this is a real snapshot. Raise it and content drifts left with silence entering from the right, which is what happens while you wait."
+    },
+    {
+      "id": "alts-note",
+      "x": 0,
+      "y": -150,
+      "w": 900,
+      "page": "page-2",
+      "text": "Not chosen, kept for reference. A costs ~117px of new panel height and is the most legible; B costs ~56px by making the ribbon the lid of the segmented control, at the price of labels fighting the waveform for contrast."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}
