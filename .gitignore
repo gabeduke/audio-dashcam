@@ -30,3 +30,6 @@ STATE.md
 
 # Seeded design canvas output; re-seeded from design/*.dc.html
 design/buffer-ribbon.html
+
+# Harness-managed worktrees
+.claude/worktrees/
