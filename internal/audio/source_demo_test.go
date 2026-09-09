@@ -126,3 +126,43 @@ func TestDemoSourceCloseIsIdempotent(t *testing.T) {
 		t.Errorf("Shutdown() error: %v", err)
 	}
 }
+
+// Open must be safe to call on a source that is already running: the previous
+// generator has to be torn down, not orphaned, because both would then share
+// the source's RNG -- which is not safe for concurrent use.
+func TestDemoSourceOpenTwiceDoesNotOrphanTheFirstGenerator(t *testing.T) {
+	src := NewDemoSource(demoConfig())
+
+	var mu sync.Mutex
+	calls := make(map[int]int) // generation -> sink calls seen
+
+	open := func(generation int) {
+		if _, err := src.Open(func([]int32) {
+			mu.Lock()
+			calls[generation]++
+			mu.Unlock()
+		}); err != nil {
+			t.Errorf("Open(%d) error: %v", generation, err)
+		}
+	}
+
+	open(1)
+	time.Sleep(200 * time.Millisecond)
+	open(2) // deliberately no Close
+	defer src.Close()
+
+	mu.Lock()
+	first := calls[1]
+	mu.Unlock()
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls[1] != first {
+		t.Errorf("the first generator was still delivering after a second Open: %d -> %d calls", first, calls[1])
+	}
+	if calls[2] == 0 {
+		t.Error("the second generator delivered nothing")
+	}
+}

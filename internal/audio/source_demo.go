@@ -55,6 +55,12 @@ func NewDemoSource(cfg *config.Config) Source {
 }
 
 func (s *demoSource) Open(sink func([]int32)) (string, error) {
+	// A second Open without an intervening Close would orphan the previous
+	// generator goroutine -- which would then be sharing this source's RNG
+	// with the new one, and rand.Rand is not safe for concurrent use. The
+	// production caller always closes first; this is belt and braces.
+	s.Close()
+
 	s.mu.Lock()
 	s.stop = make(chan struct{})
 	s.done = make(chan struct{})
