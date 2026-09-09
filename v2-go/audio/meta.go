@@ -32,6 +32,17 @@ type Meta struct {
 	Label   string `json:"label,omitempty"`
 	Starred bool   `json:"starred,omitempty"`
 	Trim    *Trim  `json:"trim,omitempty"`
+
+	// BPM is the tempo the take was played at, read from the EP's MIDI clock
+	// at save time and editable afterwards.
+	//
+	// A pointer because absent and zero are different states: no MIDI device,
+	// no clock, or too short a window all mean "no tempo", and a take with a
+	// tempo of 0 does not exist. The free-running clock does not reliably
+	// match the loaded project tempo -- one idle window read 129.87
+	// rock-steady against a project set to 92 -- so this is a starting point
+	// the owner overrides, never a fact.
+	BPM *float64 `json:"bpm,omitempty"`
 }
 
 // ErrNewerSidecar reports a sidecar written by a build that knew fields this

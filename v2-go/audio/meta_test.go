@@ -3,6 +3,7 @@ package audio
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -198,5 +199,79 @@ func TestWriteMetaCleansUpTempFileOnRenameError(t *testing.T) {
 	}
 	if len(leftovers) != 0 {
 		t.Errorf("temp files left behind after failed WriteMeta: %v", leftovers)
+	}
+}
+
+func TestMetaBPMRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "jam_a.wav")
+
+	bpm := 129.87
+	if err := WriteMeta(wav, Meta{Label: "one", BPM: &bpm}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ReadMeta(wav)
+	if got.BPM == nil {
+		t.Fatal("BPM = nil, want 129.87")
+	}
+	if *got.BPM != 129.87 {
+		t.Errorf("BPM = %v, want 129.87", *got.BPM)
+	}
+	if got.Label != "one" {
+		t.Errorf("Label = %q, want %q", got.Label, "one")
+	}
+}
+
+// Absent must be distinguishable from zero. A take saved with no MIDI device
+// present has no tempo; it does not have a tempo of nothing.
+func TestMetaAbsentBPMIsNilNotZero(t *testing.T) {
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "jam_a.wav")
+
+	if err := WriteMeta(wav, Meta{Label: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadMeta(wav); got.BPM != nil {
+		t.Errorf("BPM = %v, want nil", *got.BPM)
+	}
+
+	b, err := os.ReadFile(metaPath(wav))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "bpm") {
+		t.Errorf("sidecar carries a bpm key when none was set: %s", b)
+	}
+}
+
+// A sidecar written before this field existed must still load. Version is
+// deliberately not bumped: the rule in meta.go is to bump only for a change
+// older readers cannot tolerate, and an optional additive field is tolerable.
+func TestMetaSidecarWithoutBPMStillLoads(t *testing.T) {
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "jam_a.wav")
+	old := `{"version":1,"label":"before bpm existed","starred":true}`
+	if err := os.WriteFile(metaPath(wav), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ReadMeta(wav)
+	if got.Label != "before bpm existed" || !got.Starred {
+		t.Errorf("old sidecar did not load: %+v", got)
+	}
+	if got.BPM != nil {
+		t.Errorf("BPM = %v, want nil", *got.BPM)
+	}
+	if got.Version != 1 {
+		t.Errorf("Version = %d, want 1 (this field must not bump it)", got.Version)
+	}
+}
+
+// The other direction: a sidecar carrying a BPM must load in a build that
+// predates the field. Version 1 is what makes that true, so pin it.
+func TestMetaVersionIsUnchangedByBPM(t *testing.T) {
+	if MetaVersion != 1 {
+		t.Errorf("MetaVersion = %d, want 1; adding an optional field must not bump it", MetaVersion)
 	}
 }
