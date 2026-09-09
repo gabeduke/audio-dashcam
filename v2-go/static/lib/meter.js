@@ -216,4 +216,13 @@ export class Meters {
   }
 }
 
+/** Format a duration in seconds the way the capture tiers and stats read. */
+export function fmtDur(s) {
+  if (s >= 60) {
+    const m = s / 60;
+    return Number.isInteger(m) ? `${m}m` : `${m.toFixed(1)}m`;
+  }
+  return `${s}s`;
+}
+
 export { FLOOR_DB, dbToFrac };

@@ -1,7 +1,7 @@
 // Audio Dashcam — app entry.
 
 import { connectLive } from '/lib/live.js';
-import { Visualizer, Meters, FLOOR_DB } from '/lib/meter.js';
+import { Visualizer, Meters, FLOOR_DB, fmtDur } from '/lib/meter.js';
 import { TakesList } from '/lib/takes.js';
 import { initWakeLock } from '/lib/wakelock.js';
 
@@ -104,14 +104,6 @@ function buildDurations(ringSeconds) {
     });
     el.durSeg.appendChild(b);
   }
-}
-
-function fmtDur(s) {
-  if (s >= 60) {
-    const m = s / 60;
-    return Number.isInteger(m) ? `${m}m` : `${m.toFixed(1)}m`;
-  }
-  return `${s}s`;
 }
 
 function buildChannelStrip(channels, saveChannels) {
