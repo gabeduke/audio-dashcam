@@ -22,6 +22,18 @@ const DemoBPM = 96.0
 type demoSource struct {
 	cfg *config.Config
 
+	// saved is a precomputed membership set built once from cfg.SaveChannels,
+	// so fill does not rebuild it on every block. It is a pure lookup, never
+	// iterated for order, so building it once changes nothing about the
+	// output.
+	saved map[int]bool
+
+	// noise backs the per-block hat bursts. It is allocated once and reseeded
+	// per block in fill (via Seed), rather than replaced, since fill runs on
+	// a single goroutine at a time and reseeding to n produces the same
+	// sequence a fresh rand.New(rand.NewSource(n)) would.
+	noise *rand.Rand
+
 	// Guards the channel pair rather than a sync.Once: Open must be able to
 	// arm a fresh generator after Close, and re-assigning a sync.Once copies
 	// a lock, which go vet rejects.
@@ -31,7 +43,15 @@ type demoSource struct {
 }
 
 func NewDemoSource(cfg *config.Config) Source {
-	return &demoSource{cfg: cfg}
+	saved := make(map[int]bool, len(cfg.SaveChannels))
+	for _, c := range cfg.SaveChannels {
+		saved[c] = true
+	}
+	return &demoSource{
+		cfg:   cfg,
+		saved: saved,
+		noise: rand.New(rand.NewSource(0)),
+	}
 }
 
 func (s *demoSource) Open(sink func([]int32)) (string, error) {
@@ -88,14 +108,12 @@ func (s *demoSource) fill(block []int32, n int64) {
 	const fullScale = 2147483648.0
 
 	rate := float64(s.cfg.SampleRate)
-	saved := make(map[int]bool, len(s.cfg.SaveChannels))
-	for _, c := range s.cfg.SaveChannels {
-		saved[c] = true
-	}
 
-	// A fixed-seed source per block keeps the hats from being identical every
-	// bar while staying deterministic for a given n.
-	noise := rand.New(rand.NewSource(n))
+	// Reseeding to n keeps the hats from being identical every bar while
+	// staying deterministic for a given n -- the same sequence a fresh
+	// rand.New(rand.NewSource(n)) would produce, without reallocating one
+	// every block.
+	s.noise.Seed(n)
 
 	for i := 0; i < s.cfg.FramesPerBuf; i++ {
 		t := float64(n+int64(i)) / rate
@@ -111,7 +129,7 @@ func (s *demoSource) fill(block []int32, n int64) {
 
 		// Hats on eighths: a short noise burst.
 		hb := beat*2 - math.Floor(beat*2)
-		hat := math.Exp(-45*hb) * (noise.Float64()*2 - 1) * 0.35
+		hat := math.Exp(-45*hb) * (s.noise.Float64()*2 - 1) * 0.35
 
 		// Bass: one note per bar, walking a minor pentatonic.
 		bar := int(math.Floor(beat / 4))
@@ -129,7 +147,7 @@ func (s *demoSource) fill(block []int32, n int64) {
 
 		for c := 0; c < s.cfg.Channels; c++ {
 			v := mix
-			if !saved[c] {
+			if !s.saved[c] {
 				// Bleed, as the real interface has on its unused pairs.
 				v *= 0.03
 			}
