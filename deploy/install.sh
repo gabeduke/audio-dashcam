@@ -174,7 +174,16 @@ if printf '%s' "$body" | grep -q '"capture_healthy":true'; then
   say "running: http://$(hostname).local:5000"
   say "next: set SAVE_CHANNELS in $ROOT/hindsight.env — the default assumes an EP-136"
 else
-  last_error="$(printf '%s' "$body" | grep -o '"last_error":"[^"]*"' | sed -e 's/^"last_error":"//' -e 's/"$//' || true)"
+  # The trailing sed undoes Go's HTML escaping. encoding/json escapes the three
+  # characters < > & into their \uXXXX forms unless SetEscapeHTML(false) is
+  # set, and the API does not set it. A browser's JSON.parse decodes them
+  # again; grep does not. Without this, the commonest error of all -- "no input
+  # device with >=8 channels" -- reaches the operator with a literal escape
+  # where its ">" should be. Observed on the Pi, 2026-09-09.
+  last_error="$(printf '%s' "$body" \
+    | grep -o '"last_error":"[^"]*"' \
+    | sed -e 's/^"last_error":"//' -e 's/"$//' \
+          -e 's/\\u003c/</g' -e 's/\\u003e/>/g' -e 's/\\u0026/\&/g' || true)"
   say "running: http://$(hostname).local:5000 — but not recording"
   say "capture error: ${last_error:-(none reported)}"
   say "hindsight will keep retrying on its own; plug the interface in (or fix the error above) — check with: systemctl --user status hindsight.service"
