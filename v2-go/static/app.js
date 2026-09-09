@@ -83,7 +83,7 @@ function buildDurations(ringSeconds) {
   const opts = [];
   if (ringSeconds >= 30) opts.push({ s: 30, label: '30s' });
   if (ringSeconds >= 120) opts.push({ s: 120, label: '2m' });
-  if (ringSeconds >= 600) opts.push({ s: 600, label: '10m' });
+  if (ringSeconds >= 420) opts.push({ s: 420, label: '7m' });
   opts.push({ s: 0, label: `Full ${fmtDur(ringSeconds)}` });
 
   // Prefer 30s; otherwise the shortest available.

@@ -30,7 +30,7 @@ that matter most:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `RING_SECONDS` | `120` | Buffer length and the maximum capture. Dominates RAM: `seconds x 48000 x channels x 4` bytes |
+| `RING_SECONDS` | `900` | Buffer length and the maximum capture. Dominates RAM: `seconds x 48000 x channels x 4` bytes, so 900 is ~1.3 GB resident and ~2.6 GB while a full capture is copied out |
 | `SAVE_CHANNELS` | `3,4` | 1-indexed pair holding the stereo master |
 | `SAVE_ALL_CHANNELS` | `false` | Write all channels instead (4x the disk) |
 | `MIN_FREE_GB` | `1.0` | Captures are refused below this, with a 507 |

@@ -42,7 +42,7 @@ func Load() (*Config, error) {
 		SampleRate:      envInt("SAMPLE_RATE", 48000),
 		FramesPerBuf:    envInt("FRAMES_PER_BUFFER", 2048),
 		InputLatencyMS:  envInt("INPUT_LATENCY_MS", 100),
-		RingSeconds:     envInt("RING_SECONDS", 120),
+		RingSeconds:     envInt("RING_SECONDS", 900),
 		OutputDir:       env("OUTPUT_DIR", filepath.Join(home, "audio-dashcam", "jam_saves")),
 		SaveAllChannels: envBool("SAVE_ALL_CHANNELS", false),
 		MinFreeGB:       envFloat("MIN_FREE_GB", 1.0),
