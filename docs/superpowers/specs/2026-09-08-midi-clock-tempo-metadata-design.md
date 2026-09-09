@@ -37,6 +37,33 @@ features:
 
 That last point is why editability is a requirement rather than a convenience.
 
+## Correction, 2026-09-09: the EP has no sequencer
+
+**The owner confirmed during hardware verification that the EP-136 has no
+sequencer at all.** The 1010music Bento is connected over 3.5mm audio only, and
+carries no MIDI. The EP is *inferring* a tempo with an on-device algorithm —
+the same figure it presumably uses to time its FX — and transmitting that as
+clock.
+
+This changes three things in the section above, none of them the design:
+
+- **"Whether the EP sends Start was never validly tested" is now moot.** There
+  is no transport to send. The beat grid is closed off at the source rather
+  than merely untested, and no future retest can reopen it from this device.
+- **It explains the finding that made editability a requirement.** "One idle
+  window read 129.87 BPM, rock-stable, while the project was set to 92" was
+  never a device misreporting a project tempo — there is no project tempo on
+  the wire. That number was the inference engine's current belief, and it is
+  free to disagree with anything the player thinks is true.
+- **It reframes the field.** The BPM is the EP's guess at the room's tempo, not
+  ground truth. Measured on a silent room it still reported a rock-steady
+  100.67, so the value can be stale or arbitrary with no signal to infer from.
+  Editability is no longer a safeguard against a rare wrong reading; it is the
+  entire point of the field.
+
+The architecture, the estimator, and the failure behaviour are unaffected. A
+clock is a clock regardless of what generates it.
+
 ## What was rejected, and why
 
 **Transport-triggered capture.** Dead by the owner's decision: a start/stop
