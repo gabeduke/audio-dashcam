@@ -28,8 +28,9 @@ ring writer goroutine ──► Ring (RING_SECONDS)               │
    │ Levels (10ms bins)       │ Snapshot(seconds)           │
    ├──► Envelope (whole ring) │                             │
    ▼                          ▼                             ▼
-/api/live   (WebSocket)   WAV ─┬──► _preview.mp3      .meta.json (bpm)
-/api/envelope (ribbon)         └──► .peaks.json
+/api/live   (WebSocket)   WAV ─┬──► _preview.mp3      .meta.json (bpm, flags)
+/api/envelope (ribbon)         ├──► .peaks.json
+                                └──► cue points, written into the WAV itself
 ```
 
 ## The callback never blocks

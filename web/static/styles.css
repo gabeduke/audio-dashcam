@@ -14,6 +14,7 @@
   --accent-dk: #0f7f5f;
   --warn:      #fbbf24;
   --danger:    #f87171;
+  --flag:      #ffb020;
   --radius:    14px;
   --tap:       48px;
   /* 10px top padding + 24px logo + 10px bottom padding + 1px border. The
@@ -151,6 +152,43 @@ main {
 .rb-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(38, 50, 74, .9); }
 .rb-mark.on { background: rgba(52, 211, 153, .55); }
 
+/* A live flag: a point, not a range, so it is a positioned tick rather than a
+   library region. The flag glyph on top makes it findable at a glance among
+   the tier marks, which share this layer's general shape but not its color.
+   Clickable -- it backs undo of a mistap (DELETE /api/flag?frame=N) -- so
+   .rb-layer's blanket pointer-events: none is overridden back to auto here. */
+.rb-flag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--flag);
+  box-shadow: 0 0 4px rgba(255, 176, 32, 0.6);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.rb-flag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--flag);
+}
+/* A transparent hit box, well past the 2px visual bar: a hairline is nearly
+   impossible to land a tap on, and this widens the target without touching
+   how the tick itself looks. */
+.rb-flag::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  right: -6px;
+}
+
 .rb-scrim {
   position: absolute; top: 0; left: 0; right: 0; height: 22px;
   background: linear-gradient(to bottom, rgba(6, 11, 22, .92), rgba(6, 11, 22, 0));
@@ -282,6 +320,17 @@ main {
   opacity: 0.85;
 }
 
+/* Mark rides beside the duration segments rather than adding a row of its
+   own -- see the .stat comment above for how thin the landscape-phone
+   margin above Capture already is. align-items:stretch makes Mark match
+   .seg's height exactly, so this row costs nothing vertically. */
+.capture-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.capture-row .seg { flex: 1 1 auto; min-width: 0; }
+
 .seg {
   display: grid;
   grid-auto-flow: column;
@@ -303,8 +352,36 @@ main {
   border-radius: 8px;
   cursor: pointer;
   transition: background 140ms, color 140ms;
+  /* Mark now shares this row and narrows .seg's share of it. A clipped
+     "Full 15m" is a far better failure than a wrapped one, which would grow
+     the row and could push Capture toward the fold -- the same defensive
+     choice .stat .k makes above. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 2px;
 }
 .seg button[aria-pressed="true"] { background: var(--panel); color: var(--accent); }
+
+.mark-btn {
+  flex: none;
+  width: 50px;
+  border: 1px solid var(--flag);
+  border-radius: 11px;
+  background: var(--panel-2);
+  color: var(--flag);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, opacity 140ms;
+}
+.mark-btn:active { background: rgba(255, 176, 32, 0.16); }
+.mark-btn[disabled] {
+  border-color: var(--line);
+  color: var(--ink-faint);
+  cursor: default;
+}
 
 .capture-btn {
   margin-top: 12px;
@@ -445,11 +522,39 @@ main {
 }
 .take-bpm-input:focus { outline: none; }
 
-.wave { height: 48px; margin-bottom: 9px; }
+/* manipulation: a flag is placed with a double-tap, and without this a phone
+   reads that as a request to zoom the page instead of the wave. */
+.wave { position: relative; height: 48px; margin-bottom: 9px; touch-action: manipulation; }
 .wave.pending {
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
   background: var(--panel); border-radius: 7px;
+}
+
+/* Flags on a saved take, positioned over the waveform by frame fraction.
+   Points, not ranges, so plain absolutely-positioned ticks rather than a
+   WaveSurfer region plugin -- see the ribbon's .rb-flag for the live version
+   of the same idea. The layer ignores clicks so they reach the wave
+   underneath (which adds a flag); a tick re-enables pointer events on itself
+   to stay clickable for removal. */
+.take-flags {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.take-flag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--flag);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.take-flag:hover {
+  width: 4px;
+  margin-left: -2px;
 }
 
 .take-actions { display: flex; align-items: center; gap: 7px; }

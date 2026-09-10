@@ -3,8 +3,11 @@ package audio
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gabeduke/hindsight/internal/config"
 )
 
 // writeFakeTake creates a file that ListTakes will pick up. The WAV header is
@@ -249,5 +252,192 @@ func TestListTakesReportsBPM(t *testing.T) {
 	}
 	if *takes[0].BPM != 92.5 {
 		t.Errorf("BPM = %v, want 92.5", *takes[0].BPM)
+	}
+}
+
+// The take list is what the waveform overlay reads flags from (GET
+// /api/jams), a separate path from the sidecar PATCH stores them through, so
+// this locks in that ListTakes actually carries them across.
+func TestListTakesReportsFlags(t *testing.T) {
+	dir := t.TempDir()
+	wav := writeFakeTake(t, dir, "jam_a.wav", time.Minute)
+	if err := WriteMeta(wav, Meta{Flags: []Flag{{Frame: 100}, {Frame: 900}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	takes, err := ListTakes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(takes) != 1 || len(takes[0].Flags) != 2 {
+		t.Fatalf("flags missing from the listing: %+v", takes)
+	}
+	if takes[0].Flags[0].Frame != 100 || takes[0].Flags[1].Frame != 900 {
+		t.Errorf("frames = %+v, want 100 then 900", takes[0].Flags)
+	}
+}
+
+func TestFlagsForWindowTranslatesToTakeRelativeFrames(t *testing.T) {
+	// Window covers absolute frames [1000, 1400).
+	got := flagsForWindow([]uint64{1000, 1200, 1399}, 1000, 1400)
+	want := []int64{0, 200, 399}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %d flags", got, len(want))
+	}
+	for i := range want {
+		if got[i].Frame != want[i] {
+			t.Errorf("flag[%d].Frame = %d, want %d", i, got[i].Frame, want[i])
+		}
+	}
+}
+
+func TestFlagsForWindowExcludesMarksOutsideIt(t *testing.T) {
+	got := flagsForWindow([]uint64{999, 1400, 5000}, 1000, 1400)
+	if len(got) != 0 {
+		t.Errorf("got %+v, want none: 999 predates the window and 1400 is past its last frame", got)
+	}
+}
+
+func TestFlagsForWindowOnAnEmptyWindow(t *testing.T) {
+	if got := flagsForWindow([]uint64{5}, 0, 0); got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestFlagsForWindowWithNoMarks(t *testing.T) {
+	if got := flagsForWindow(nil, 1000, 2000); got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestMarkNowOnAnEmptyRingReportsFalse(t *testing.T) {
+	c := NewCapture(&config.Config{Channels: 2, SampleRate: 48000, RingSeconds: 10, SaveChannels: []int{0, 1}}, nil)
+	if _, ok := c.MarkNow(); ok {
+		t.Error("MarkNow on an empty ring = true, want false")
+	}
+}
+
+// The regression this pins: a mark placed at TotalFrames() rather than
+// TotalFrames()-1 lands one past the last frame of the very take that should
+// contain it, and flagsForWindow's half-open window drops it. Marking and then
+// capturing is the feature's core path.
+func TestAMarkPlacedNowSurvivesAnImmediateCapture(t *testing.T) {
+	c := NewCapture(&config.Config{Channels: 2, SampleRate: 48000, RingSeconds: 10, SaveChannels: []int{0, 1}}, nil)
+	c.Ring().WriteFrames(make([]int32, 1000*2))
+
+	frame, ok := c.MarkNow()
+	if !ok {
+		t.Fatal("MarkNow reported no audio")
+	}
+
+	_, got, end := c.Ring().SnapshotAt(0) // the whole ring, as Save(0) does
+	flags := flagsForWindow(c.Flags().Active(end, 480000), end-uint64(got), end)
+	if len(flags) != 1 {
+		t.Fatalf("flags in the captured window = %+v, want the mark at %d to survive", flags, frame)
+	}
+	if flags[0].Frame != int64(got-1) {
+		t.Errorf("flag frame = %d, want %d (the take's last frame)", flags[0].Frame, got-1)
+	}
+}
+
+func TestStampFlagsWritesSidecarAndCues(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jam_stamp.wav")
+	data := make([]int32, 1000*2)
+	if _, err := WriteWAV(p, data, 2, []int{0, 1}, 48000); err != nil {
+		t.Fatalf("WriteWAV: %v", err)
+	}
+
+	stampFlags(p, []Flag{{Frame: 100}, {Frame: 900}})
+
+	m := ReadMeta(p)
+	if len(m.Flags) != 2 || m.Flags[0].Frame != 100 || m.Flags[1].Frame != 900 {
+		t.Errorf("sidecar flags = %+v, want frames 100 and 900", m.Flags)
+	}
+	cues, err := ReadCues(p)
+	if err != nil {
+		t.Fatalf("ReadCues: %v", err)
+	}
+	if len(cues) != 2 || cues[0] != 100 || cues[1] != 900 {
+		t.Errorf("cues = %v, want [100 900]", cues)
+	}
+}
+
+func TestStampFlagsWithNoneWritesNothing(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jam_none.wav")
+	data := make([]int32, 100*2)
+	if _, err := WriteWAV(p, data, 2, []int{0, 1}, 48000); err != nil {
+		t.Fatalf("WriteWAV: %v", err)
+	}
+	before, _ := os.Stat(p)
+
+	stampFlags(p, nil)
+
+	if m := ReadMeta(p); m.Flags != nil {
+		t.Errorf("Flags = %+v, want nil", m.Flags)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(p, ".wav") + ".meta.json"); err == nil {
+		t.Error("a sidecar was written for a take with no flags")
+	}
+	after, _ := os.Stat(p)
+	if after.Size() != before.Size() {
+		t.Errorf("file size changed from %d to %d", before.Size(), after.Size())
+	}
+}
+
+// Save calls stampFlags then stampTempo, and each does its own
+// ReadMeta -> mutate -> WriteMeta. Correctness depends on that running
+// synchronously in this order: making either call asynchronous lets the two
+// read-modify-writes interleave, so one's read predates the other's write and
+// silently loses it. This goes through the real Saver rather than calling
+// stampFlags/stampTempo directly, so that a regression in Save's own call
+// order or synchronicity -- not just in the helpers themselves -- shows up
+// here. Nothing else in this file exercises both fields on one take.
+func TestSaveWritesFlagsAndTempoOnTheSameTake(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Channels:     2,
+		SampleRate:   48000,
+		RingSeconds:  10,
+		SaveChannels: []int{0, 1},
+		OutputDir:    dir,
+	}
+	cap := NewCapture(cfg, nil)
+	cap.Ring().WriteFrames(make([]int32, 1000*2))
+	if _, ok := cap.MarkNow(); !ok {
+		t.Fatal("MarkNow reported no audio")
+	}
+
+	saver := NewSaver(cap)
+	saver.SetTempoSource(&fakeTempo{bpm: 120, ok: true})
+
+	name, err := saver.Save(0)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	m := ReadMeta(filepath.Join(dir, name))
+	if len(m.Flags) != 1 {
+		t.Errorf("Flags = %+v, want the mark placed before Save to survive it", m.Flags)
+	}
+	if m.BPM == nil || *m.BPM != 120 {
+		t.Errorf("BPM = %v, want 120", m.BPM)
+	}
+}
+
+// A cue-write failure must leave the sidecar intact: metadata is the source of
+// truth and the WAV's cue chunk is a derived export.
+func TestStampFlagsKeepsTheSidecarWhenTheCueWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "jam_bad.wav")
+	// Not a WAV at all, so WriteCues must fail.
+	if err := os.WriteFile(p, []byte("not a riff file"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	stampFlags(p, []Flag{{Frame: 5}})
+
+	m := ReadMeta(p)
+	if len(m.Flags) != 1 || m.Flags[0].Frame != 5 {
+		t.Errorf("sidecar flags = %+v, want the flag kept despite the cue failure", m.Flags)
 	}
 }

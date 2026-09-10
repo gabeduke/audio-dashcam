@@ -275,3 +275,85 @@ func TestMetaVersionIsUnchangedByBPM(t *testing.T) {
 		t.Errorf("MetaVersion = %d, want 1; adding an optional field must not bump it", MetaVersion)
 	}
 }
+
+func TestNormalizeFlagsSortsAndDeduplicates(t *testing.T) {
+	got := NormalizeFlags([]Flag{{Frame: 500}, {Frame: 100}, {Frame: 500}, {Frame: 0}})
+	want := []int64{0, 100, 500}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for i, f := range got {
+		if f.Frame != want[i] {
+			t.Errorf("flag[%d].Frame = %d, want %d", i, f.Frame, want[i])
+		}
+	}
+}
+
+func TestNormalizeFlagsDropsNegativeFrames(t *testing.T) {
+	got := NormalizeFlags([]Flag{{Frame: -1}, {Frame: 10}})
+	if len(got) != 1 || got[0].Frame != 10 {
+		t.Errorf("got %+v, want only frame 10", got)
+	}
+}
+
+func TestNormalizeFlagsKeepsFirstLabelOfADuplicate(t *testing.T) {
+	got := NormalizeFlags([]Flag{{Frame: 7, Label: "keep"}, {Frame: 7, Label: "drop"}})
+	if len(got) != 1 || got[0].Label != "keep" {
+		t.Errorf("got %+v, want one flag labelled \"keep\"", got)
+	}
+}
+
+func TestFlagsRoundTripThroughSidecar(t *testing.T) {
+	wav := filepath.Join(t.TempDir(), "jam_x.wav")
+	in := Meta{Flags: []Flag{{Frame: 48000}, {Frame: 96000, Label: "chorus"}}}
+
+	if err := WriteMeta(wav, in); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+	got := ReadMeta(wav)
+
+	if len(got.Flags) != 2 {
+		t.Fatalf("Flags len = %d, want 2 (%+v)", len(got.Flags), got.Flags)
+	}
+	if got.Flags[0].Frame != 48000 || got.Flags[1].Frame != 96000 {
+		t.Errorf("frames = %+v, want 48000 then 96000", got.Flags)
+	}
+	if got.Flags[1].Label != "chorus" {
+		t.Errorf("Label = %q, want \"chorus\"", got.Flags[1].Label)
+	}
+	if got.Version != MetaVersion {
+		t.Errorf("Version = %d, want %d", got.Version, MetaVersion)
+	}
+}
+
+func TestSidecarWithoutFlagsStillReadsClean(t *testing.T) {
+	dir := t.TempDir()
+	wav := filepath.Join(dir, "jam_old.wav")
+	// A sidecar written before flags existed.
+	body := `{"version":1,"label":"old take","starred":true}`
+	if err := os.WriteFile(strings.TrimSuffix(wav, ".wav")+".meta.json", []byte(body), 0o644); err != nil {
+		t.Fatalf("seed sidecar: %v", err)
+	}
+
+	got := ReadMeta(wav)
+	if got.Flags != nil {
+		t.Errorf("Flags = %+v, want nil", got.Flags)
+	}
+	if got.Label != "old take" || !got.Starred {
+		t.Errorf("pre-flags fields lost: %+v", got)
+	}
+}
+
+func TestMetaWithNoFlagsOmitsTheKey(t *testing.T) {
+	wav := filepath.Join(t.TempDir(), "jam_x.wav")
+	if err := WriteMeta(wav, Meta{Label: "x"}); err != nil {
+		t.Fatalf("WriteMeta: %v", err)
+	}
+	b, err := os.ReadFile(strings.TrimSuffix(wav, ".wav") + ".meta.json")
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	if strings.Contains(string(b), "flags") {
+		t.Errorf("sidecar mentions flags with none set:\n%s", b)
+	}
+}

@@ -54,10 +54,35 @@ func (r *Ring) bufferedLocked() int {
 	return int(r.totalFrames)
 }
 
+// TotalFrames reports how many frames have ever been written. It is monotonic
+// for the life of the Ring, and the Ring is built once in NewCapture and never
+// rebuilt -- supervise() reopens the stream, not the ring -- so this is a valid
+// absolute clock across USB unplugs. Flags are stored against it.
+//
+// It advances only when audio arrives, so it stalls during a dropout. That is
+// deliberate: a mark stays pinned to the audio rather than to wall clock.
+func (r *Ring) TotalFrames() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.totalFrames
+}
+
 // Snapshot copies the most recent `frames` frames out in chronological order.
 // It clamps to what is actually buffered and returns the interleaved copy plus
-// the frame count. The lock is held only for the two memcpys.
+// the frame count.
 func (r *Ring) Snapshot(frames int) ([]int32, int) {
+	data, got, _ := r.SnapshotAt(frames)
+	return data, got
+}
+
+// SnapshotAt is Snapshot plus the absolute frame the window ends at, read under
+// the same lock acquisition as the copy itself. Callers mapping absolute
+// positions into the returned window must use this rather than pairing
+// Snapshot with a separate TotalFrames call: a write landing between the two
+// would shift the window out from under the position.
+//
+// The window covers absolute frames [endFrame-got, endFrame).
+func (r *Ring) SnapshotAt(frames int) ([]int32, int, uint64) {
 	r.mu.Lock()
 
 	avail := r.bufferedLocked()
@@ -66,7 +91,7 @@ func (r *Ring) Snapshot(frames int) ([]int32, int) {
 	}
 	if frames == 0 {
 		r.mu.Unlock()
-		return nil, 0
+		return nil, 0, 0
 	}
 
 	n := len(r.buf)
@@ -78,9 +103,10 @@ func (r *Ring) Snapshot(frames int) ([]int32, int) {
 	if c < want {
 		copy(out[c:], r.buf[:want-c])
 	}
+	end := r.totalFrames
 
 	r.mu.Unlock()
-	return out, frames
+	return out, frames, end
 }
 
 // Capacity returns the ring size in frames.

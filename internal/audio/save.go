@@ -97,7 +97,7 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if seconds > 0 {
 		frames = int(seconds * float64(cfg.SampleRate))
 	}
-	data, gotFrames := s.cap.Ring().Snapshot(frames)
+	data, gotFrames, endFrame := s.cap.Ring().SnapshotAt(frames)
 	// The end of the captured window, in wall-clock terms. The ring stores
 	// frames and a counter and carries no clock of its own, so this is derived
 	// rather than read: now, minus the snapshot's duration.
@@ -111,6 +111,15 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if gotFrames == 0 {
 		return "", ErrNoAudio
 	}
+
+	// Read the marks against the same window the snapshot describes. Active
+	// also prunes anything that has aged out, which is the only way a live mark
+	// ever leaves the store.
+	winStart := endFrame - uint64(gotFrames)
+	takeFlags := flagsForWindow(
+		s.cap.Flags().Active(endFrame, uint64(s.cap.cfg.RingFrames())),
+		winStart, endFrame,
+	)
 
 	s.mu.Lock()
 	s.saving = true
@@ -139,6 +148,7 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if err := WritePeaks(peaksPath(wavPath), peaks); err != nil {
 		log.Printf("[!] peaks for %s: %v", name, err)
 	}
+	stampFlags(wavPath, takeFlags)
 
 	stampTempo(wavPath, s.tempoSource(), capturedAt,
 		time.Duration(float64(gotFrames)/float64(cfg.SampleRate)*float64(time.Second)))
@@ -151,6 +161,24 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	go s.prune()
 
 	return name, nil
+}
+
+// flagsForWindow maps live marks, which are absolute ring frames, into frames
+// relative to a take covering absolute [start, end). Marks outside the window
+// are not in this take and are simply skipped -- they stay in the store until
+// they age out of the ring.
+func flagsForWindow(marks []uint64, start, end uint64) []Flag {
+	if end <= start {
+		return nil
+	}
+	var out []Flag
+	for _, m := range marks {
+		if m < start || m >= end {
+			continue
+		}
+		out = append(out, Flag{Frame: int64(m - start)})
+	}
+	return out
 }
 
 // stampTempo merges a BPM into a take's sidecar, if the clock has one to give.
@@ -185,6 +213,36 @@ func stampTempo(wavPath string, src TempoSource, end time.Time, window time.Dura
 		return
 	}
 	log.Printf("[*] %s — %.2f BPM", filepath.Base(wavPath), bpm)
+}
+
+// stampFlags records a take's flags in its sidecar and mirrors them into the
+// WAV as cue points.
+//
+// Like stampTempo, this runs after the audio is safely on disk and must never
+// fail the save. The sidecar is the source of truth; the cue chunk is a derived
+// export, so a cue failure is logged and the flags are kept.
+func stampFlags(wavPath string, flags []Flag) {
+	flags = NormalizeFlags(flags)
+	if len(flags) == 0 {
+		return
+	}
+
+	m := ReadMeta(wavPath)
+	m.Flags = flags
+	if err := WriteMeta(wavPath, m); err != nil {
+		log.Printf("[!] flags for %s: %v", filepath.Base(wavPath), err)
+		return
+	}
+
+	offsets := make([]uint64, 0, len(flags))
+	for _, f := range flags {
+		offsets = append(offsets, uint64(f.Frame))
+	}
+	if err := WriteCues(wavPath, offsets); err != nil {
+		log.Printf("[!] cue points for %s: %v", filepath.Base(wavPath), err)
+		return
+	}
+	log.Printf("[*] %s — %d flag(s)", filepath.Base(wavPath), len(flags))
 }
 
 // makePreview renders the mp3 proxy. The channel mapping is explicit: a bare
@@ -259,6 +317,7 @@ type Take struct {
 	Starred bool     `json:"starred"`
 	Trim    *Trim    `json:"trim,omitempty"`
 	BPM     *float64 `json:"bpm,omitempty"`
+	Flags   []Flag   `json:"flags,omitempty"`
 }
 
 // ListTakes returns starred takes first, then the rest newest first. Duration
@@ -300,6 +359,7 @@ func ListTakes(dir string) ([]Take, error) {
 		t.Starred = m.Starred
 		t.Trim = m.Trim
 		t.BPM = m.BPM
+		t.Flags = m.Flags
 
 		out = append(out, t)
 	}

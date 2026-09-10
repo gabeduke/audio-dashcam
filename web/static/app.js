@@ -22,6 +22,7 @@ const el = {
   statXruns: $('stat-xruns'),
   statTempo: $('stat-tempo'),
   durSeg: $('dur-seg'),
+  markBtn: $('mark-btn'),
   captureBtn: $('capture-btn'),
   lastSaved: $('last-saved'),
   takes: $('takes'),
@@ -184,6 +185,11 @@ function applyStatus(s) {
   else if (!healthy) el.captureBtn.textContent = 'No input';
   else el.captureBtn.textContent = 'Capture';
 
+  // Not `healthy`: an interface can be powered off with a full buffer still
+  // in memory, and marking a moment in audio you can still capture is the
+  // point of the feature.
+  el.markBtn.disabled = !s.buffered_seconds;
+
   // Channel strip reads its levels from /api/status so it stays live even
   // before the websocket has delivered a frame.
   if (chanMeters && s.channel_rms) {
@@ -200,6 +206,9 @@ async function pollStatus() {
     el.healthDot.className = 'dot bad';
     el.healthText.textContent = 'server unreachable';
     el.captureBtn.disabled = true;
+    // buffered_seconds is unknown, not zero, but the flag would fail the
+    // same way capture would, so it gets the same fail-safe.
+    el.markBtn.disabled = true;
   }
 }
 
@@ -245,9 +254,31 @@ async function capture() {
 
 el.captureBtn.addEventListener('click', capture);
 
+async function mark() {
+  const btn = el.markBtn;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/flag', { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      toast(body.error || 'could not mark', 'bad');
+      return;
+    }
+    ribbon.poll(); // draw the new tick without waiting for the next poll
+  } catch {
+    toast('could not mark', 'bad');
+  } finally {
+    // The next status poll re-enables it if audio is still buffered; this
+    // just guards against a second click landing mid-request.
+    btn.disabled = !status?.buffered_seconds;
+  }
+}
+
+el.markBtn.addEventListener('click', mark);
+
 // ---------------------------------------------------------------- live
 
-ribbon = new Ribbon(el.vizWrap);
+ribbon = new Ribbon(el.vizWrap, { onToast: toast });
 
 connectLive({
   onFrame: (f) => {

@@ -69,6 +69,7 @@ export class TakesList {
       const msg = await res.json().then((j) => j.error).catch(() => res.statusText);
       throw new Error(msg);
     }
+    const body = await res.json().catch(() => ({}));
     // The write has landed. A failure past this point is a stale list, not a
     // failed write, and must not be thrown to a caller whose catch says
     // "could not star" — the next poll reconciles.
@@ -76,6 +77,7 @@ export class TakesList {
     try {
       await this.refresh();
     } catch { /* next poll picks it up */ }
+    return body;
   }
 
   async refresh() {
@@ -164,11 +166,35 @@ export class TakesList {
       ws: null,
       audio: null,
       mounting: false,
+      waveUnavailable: false,
       data: t,
     };
 
     row.playBtn.addEventListener('click', () => this.togglePlay(row));
     row.delBtn.addEventListener('click', () => this.confirmDelete(row));
+
+    // Attached once, here, rather than in mountWave: mountWave can run more
+    // than once for a row (it's guarded, but callers don't know that), and a
+    // second listener would turn one dblclick into two flags. row.waveEl is
+    // the same element across a wave's whole life, mounted or not.
+    //
+    // This is a *double*-click, not a click: WaveSurfer's own click handler
+    // seeks the playhead and never calls stopPropagation, so a single click
+    // here would both seek and permanently write a flag -- there would be no
+    // way left to scrub a take without marking it. WaveSurfer emits dblclick
+    // but never treats it as a seek, so the two gestures coexist without
+    // stepping on each other. Do not "simplify" this back to click.
+    row.waveEl.addEventListener('dblclick', (e) => {
+      if (e.target.classList.contains('take-flag')) return; // removal handled by the tick itself
+      if (!row.ws) return; // no mounted waveform to flag against (pending/unavailable placeholders)
+      const t = row.data;
+      const duration = t.duration_seconds || 0;
+      if (!duration) return; // a take whose sidecar is still landing has no frame axis yet
+      const r = row.waveEl.getBoundingClientRect();
+      const frac = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 0.999999);
+      const frame = Math.floor(frac * duration * (t.sample_rate || 48000));
+      this.setFlags(row, [...(t.flags || []), { frame }]);
+    });
 
     row.starBtn.addEventListener('click', async () => {
       const next = !row.data.starred;
@@ -319,9 +345,63 @@ export class TakesList {
       row.playBtn.textContent = 'Play';
     }
 
-    // The waveform can only mount once its sidecar exists.
-    if (t.has_peaks && !row.ws && !row.mounting && this.isVisible(row.el)) {
+    // The waveform can only mount once its sidecar exists. row.waveUnavailable
+    // stops this from retrying forever once mountWave has already settled on
+    // "no peaks data" -- see mountWave's failure path below.
+    if (t.has_peaks && !row.ws && !row.mounting && !row.waveUnavailable && this.isVisible(row.el)) {
       this.mountWave(row);
+    }
+
+    this.renderFlags(row);
+  }
+
+  // Draws every flag on this take as a tick over the waveform, at
+  // frame / (duration * sample_rate) of the container's width. Runs from
+  // updateRow, so every refresh redraws the layer from row.data rather than
+  // patching it incrementally -- there is never a stale tick left behind.
+  renderFlags(row) {
+    const t = row.data;
+    let layer = row.waveEl.querySelector('.take-flags');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'take-flags';
+      row.waveEl.appendChild(layer);
+    }
+    layer.textContent = '';
+
+    // duration_seconds or sample_rate can be absent or zero while a take's
+    // sidecar is still being written; without a frame axis there is nowhere
+    // sane to draw a tick, so skip the take rather than divide by zero.
+    const totalFrames = (t.duration_seconds || 0) * (t.sample_rate || 48000);
+    if (!totalFrames) return;
+
+    for (const f of t.flags || []) {
+      const tick = document.createElement('div');
+      tick.className = 'take-flag';
+      tick.style.left = `${((f.frame / totalFrames) * 100).toFixed(3)}%`;
+      tick.title = 'click to remove';
+      tick.addEventListener('click', (e) => {
+        e.stopPropagation(); // otherwise the wave's own click handler reads this as a new flag
+        this.setFlags(row, (t.flags || []).filter((x) => x.frame !== f.frame));
+      });
+      layer.appendChild(tick);
+    }
+  }
+
+  async setFlags(row, flags) {
+    try {
+      // patchTake refreshes the list, which calls updateRow -> renderFlags
+      // for every row, so the ticks redraw from the server's own answer
+      // rather than from what was just clicked.
+      const body = await this.patchTake(row.name, { flags });
+      if (body.cue_error) {
+        // The sidecar -- the source of truth -- saved fine; only the WAV's
+        // cue chunk, a derived export, failed to update. Worth a toast, not a
+        // thrown error that would read as the flag edit itself having failed.
+        this.onToast?.(body.cue_error, 'bad');
+      }
+    } catch (e) {
+      this.onToast?.(`Could not update flags: ${e.message}`, 'bad');
     }
   }
 
@@ -344,7 +424,13 @@ export class TakesList {
 
     if (!peaks?.data?.length) {
       row.mounting = false;
+      // Settle here rather than retry: without waveUnavailable, row.ws stays
+      // unset, so the next updateRow calls mountWave again, and its async
+      // continuation wipes the flag layer renderFlags just redrew -- an
+      // indefinite flicker rather than a one-time failure.
+      row.waveUnavailable = true;
       row.waveEl.textContent = 'waveform unavailable';
+      this.renderFlags(row); // textContent above just wiped the flag layer
       return;
     }
 
@@ -404,6 +490,13 @@ export class TakesList {
       if (this.playing === row.name) this.playing = null;
       row.playBtn.textContent = 'Play';
     });
+
+    // row.waveEl.textContent was just cleared to give WaveSurfer an empty
+    // container, which also erased any flag layer an earlier updateRow had
+    // drawn into the "pending" placeholder. Redraw it now that the container
+    // holds the wave, or existing flags would stay invisible until the next
+    // poll.
+    this.renderFlags(row);
 
     row.ws = ws;
     row.audio = audio;

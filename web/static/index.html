@@ -88,7 +88,14 @@
 
     <section class="panel">
       <h2>Capture</h2>
-      <div class="seg" id="dur-seg" role="group" aria-label="Capture length"></div>
+      <!-- Mark sits beside the tier buttons, not in a row of its own: a new
+           row pushes Capture toward the bottom edge, and 844x390 landscape
+           has no margin left to give (see .capture-btn below the fold in
+           styles.css). -->
+      <div class="capture-row">
+        <div class="seg" id="dur-seg" role="group" aria-label="Capture length"></div>
+        <button class="mark-btn" id="mark-btn" title="Mark this moment">Mark</button>
+      </div>
       <button class="capture-btn" id="capture-btn">Capture</button>
       <p class="last">last saved <span id="last-saved">none</span></p>
     </section>

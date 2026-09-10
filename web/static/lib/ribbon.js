@@ -39,9 +39,11 @@ function decode(b64) {
 export class Ribbon {
   /**
    * @param {HTMLElement} wrap the existing .viz-wrap
+   * @param {{onToast?: (msg: string, kind?: string) => void}} [opts]
    */
-  constructor(wrap) {
+  constructor(wrap, { onToast } = {}) {
     this.wrap = wrap;
+    this.onToast = onToast;
     this.spans = [];      // capture tiers in seconds; 0 means the whole ring
     this.selected = null;
     this.data = null;
@@ -61,6 +63,7 @@ export class Ribbon {
     wrap.appendChild(this.svg);
 
     this.markLayer = add(wrap, 'div', 'rb-layer');
+    this.flagLayer = add(wrap, 'div', 'rb-layer');
     add(wrap, 'div', 'rb-scrim');
     this.labelLayer = add(wrap, 'div', 'rb-layer');
     add(wrap, 'div', 'rb-now');
@@ -132,6 +135,21 @@ export class Ribbon {
     this.render();
   }
 
+  /** Backs undo of a mistap: click a ribbon tick to remove that live mark. */
+  async removeFlag(frame) {
+    try {
+      const res = await fetch(`/api/flag?frame=${frame}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        this.onToast?.(body.error || 'could not remove flag', 'bad');
+        return;
+      }
+      this.poll(); // redraw the ribbon without waiting for the next tick
+    } catch {
+      this.onToast?.('could not remove flag', 'bad');
+    }
+  }
+
   render() {
     const d = this.data;
     if (!d) return;
@@ -180,6 +198,23 @@ export class Ribbon {
       label.style.transform = i === tiers.length - 1 ? 'translateX(0)' : 'translateX(-50%)';
       this.labelLayer.appendChild(label);
     });
+
+    // Live marks, drawn on the same log axis as everything else. The server
+    // sends each mark as {age_seconds, frame}: age for the log-axis position,
+    // in the same currency the rest of the ribbon already thinks in, and frame
+    // so a click can undo a mistap with DELETE /api/flag?frame=N without a
+    // second round trip. `d.flags` is absent on an older response shape,
+    // hence the fallback.
+    this.flagLayer.textContent = '';
+    for (const f of d.flags || []) {
+      const flag = add(this.flagLayer, 'div', 'rb-flag');
+      flag.style.left = `${leftPct(f.age_seconds).toFixed(2)}%`;
+      flag.title = `flag at ${fmtDur(f.age_seconds)} ago — click to remove`;
+      flag.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.removeFlag(f.frame);
+      });
+    }
 
     this.readout.textContent = this.readoutText(d, abs(sel));
   }

@@ -3,11 +3,13 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -44,6 +46,44 @@ func patch(t *testing.T, r *mux.Router, file, body string) *httptest.ResponseRec
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
+	return w
+}
+
+// newFlagAPI builds an API over a real Capture, so the flag endpoints have a
+// ring to work with. The Source is nil and nothing is started; tests write into
+// the ring directly.
+func newFlagAPI(t *testing.T) (*mux.Router, *audio.Capture, string) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := &config.Config{
+		OutputDir:    dir,
+		Channels:     2,
+		SampleRate:   48000,
+		RingSeconds:  10,
+		SaveChannels: []int{0, 1},
+	}
+	cap := audio.NewCapture(cfg, nil)
+	a := New(cfg, cap, nil, cap.Envelope(), nil)
+	r := mux.NewRouter()
+	a.SetupRoutes(r)
+	return r, cap, dir
+}
+
+// writeRealTake writes a genuine WAV, unlike writeTake, so cue points can be
+// read back off it.
+func writeRealTake(t *testing.T, dir, name string, frames int) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if _, err := audio.WriteWAV(p, make([]int32, frames*2), 2, []int{0, 1}, 48000); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func do(t *testing.T, r *mux.Router, method, url string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(method, url, nil))
 	return w
 }
 
@@ -587,5 +627,395 @@ func TestPatchTakeResponseCarriesTheBPM(t *testing.T) {
 	}
 	if got.BPM == nil || *got.BPM != 92.5 {
 		t.Errorf("response bpm = %v, want 92.5", got.BPM)
+	}
+}
+
+func TestPostFlagOnAnEmptyRingIsRejected(t *testing.T) {
+	r, _, _ := newFlagAPI(t)
+	if w := do(t, r, http.MethodPost, "/api/flag"); w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", w.Code)
+	}
+}
+
+// capture_healthy false does not mean there is no audio: an interface can be
+// powered off with a full buffer still in memory. Nothing is ever started in
+// this test, so the capture is as unhealthy as it gets.
+func TestPostFlagSucceedsWhileCaptureIsUnhealthy(t *testing.T) {
+	r, cap, _ := newFlagAPI(t)
+	cap.Ring().WriteFrames(make([]int32, 480*2))
+
+	w := do(t, r, http.MethodPost, "/api/flag")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		Frame      uint64  `json:"frame"`
+		AgeSeconds float64 `json:"age_seconds"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// 479, not 480: TotalFrames() is a count, so the newest existing frame is
+	// one less. A mark at 480 would fall outside the half-open window of every
+	// take that contains it.
+	if body.Frame != 479 {
+		t.Errorf("frame = %d, want 479", body.Frame)
+	}
+	if body.AgeSeconds != 0 {
+		t.Errorf("age_seconds = %f, want 0 for a mark at the newest frame", body.AgeSeconds)
+	}
+}
+
+func TestDeleteFlagRemovesOne(t *testing.T) {
+	r, cap, _ := newFlagAPI(t)
+	cap.Ring().WriteFrames(make([]int32, 480*2))
+	cap.Flags().Mark(479)
+
+	if w := do(t, r, http.MethodDelete, "/api/flag?frame=479"); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if cap.Flags().Len() != 0 {
+		t.Errorf("Len = %d, want 0", cap.Flags().Len())
+	}
+}
+
+func TestDeleteUnknownFlagIs404(t *testing.T) {
+	r, _, _ := newFlagAPI(t)
+	if w := do(t, r, http.MethodDelete, "/api/flag?frame=7"); w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestDeleteFlagAllClearsThem(t *testing.T) {
+	r, cap, _ := newFlagAPI(t)
+	cap.Flags().Mark(1)
+	cap.Flags().Mark(2)
+
+	if w := do(t, r, http.MethodDelete, "/api/flag?all=1"); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if cap.Flags().Len() != 0 {
+		t.Errorf("Len = %d, want 0", cap.Flags().Len())
+	}
+}
+
+// ?all=0 must not clear anything: only "1" or "true" trigger the destructive
+// path. A bare `!= ""` check would read this as truthy and wipe every live
+// flag on what looks, at the call site, like an explicit "no". No frame is
+// given either, so a correct implementation falls through to "frame or all is
+// required" (400) rather than silently succeeding.
+func TestDeleteFlagAllZeroDoesNotClear(t *testing.T) {
+	r, cap, _ := newFlagAPI(t)
+	cap.Flags().Mark(1)
+	cap.Flags().Mark(2)
+
+	if w := do(t, r, http.MethodDelete, "/api/flag?all=0"); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", w.Code, w.Body.String())
+	}
+	if cap.Flags().Len() != 2 {
+		t.Errorf("Len = %d, want 2: ?all=0 must not clear", cap.Flags().Len())
+	}
+}
+
+func TestEnvelopeCarriesFlagAges(t *testing.T) {
+	r, cap, _ := newFlagAPI(t)
+	cap.Ring().WriteFrames(make([]int32, 2*48000*2)) // 2s of audio
+	// Deliberately asymmetric: a mark at 48000 (half the 96000-frame ring)
+	// would have age (96000-48000)/48000 = 1.0 and position 48000/48000 =
+	// 1.0 too, so an implementation that reported each mark's raw position
+	// instead of its age -- exactly the mistake liveFlags' doc comment exists
+	// to head off -- would pass by coincidence. 24000 makes age (1.5s) and
+	// position (0.5s) disagree, so that bug fails this instead.
+	cap.Flags().Mark(24000)
+
+	body := getEnvelope(t, r, "?buckets=16")
+	flags, ok := body["flags"].([]any)
+	if !ok || len(flags) != 1 {
+		t.Fatalf("flags = %v, want one entry", body["flags"])
+	}
+	entry, ok := flags[0].(map[string]any)
+	if !ok {
+		t.Fatalf("flags[0] = %v, want an object", flags[0])
+	}
+	age, _ := entry["age_seconds"].(float64)
+	if age < 1.4 || age > 1.6 {
+		t.Errorf("age_seconds = %f, want about 1.5", age)
+	}
+	frame, _ := entry["frame"].(float64)
+	if frame != 24000 {
+		t.Errorf("frame = %v, want 24000", entry["frame"])
+	}
+}
+
+// The existing envelope harness passes a nil Capture. Flags must not break it.
+func TestEnvelopeWithNoCaptureStillServesAnEmptyFlagArray(t *testing.T) {
+	r := newEnvelopeAPI(t, 90000, 3000)
+	body := getEnvelope(t, r, "?buckets=8")
+	flags, ok := body["flags"].([]any)
+	if !ok {
+		t.Fatalf("flags = %v, want an array", body["flags"])
+	}
+	if len(flags) != 0 {
+		t.Errorf("flags = %v, want empty", flags)
+	}
+}
+
+func TestPatchTakeSetsFlagsAndCuePoints(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":900},{"frame":100}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+
+	wav := filepath.Join(dir, "jam_flags.wav")
+	m := audio.ReadMeta(wav)
+	if len(m.Flags) != 2 || m.Flags[0].Frame != 100 || m.Flags[1].Frame != 900 {
+		t.Errorf("flags = %+v, want sorted 100 then 900", m.Flags)
+	}
+	cues, err := audio.ReadCues(wav)
+	if err != nil {
+		t.Fatalf("ReadCues: %v", err)
+	}
+	if len(cues) != 2 || cues[0] != 100 || cues[1] != 900 {
+		t.Errorf("cues = %v, want [100 900]", cues)
+	}
+}
+
+func TestPatchTakeClearsFlagsWithNull(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+	patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10}]}`)
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":null}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if m := audio.ReadMeta(filepath.Join(dir, "jam_flags.wav")); m.Flags != nil {
+		t.Errorf("flags = %+v, want nil", m.Flags)
+	}
+}
+
+func TestPatchTakeOmittedFlagsAreLeftAlone(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+	patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10}]}`)
+
+	patch(t, r, "jam_flags.wav", `{"label":"renamed"}`)
+
+	m := audio.ReadMeta(filepath.Join(dir, "jam_flags.wav"))
+	if len(m.Flags) != 1 || m.Flags[0].Frame != 10 {
+		t.Errorf("flags = %+v, want the existing flag untouched", m.Flags)
+	}
+}
+
+// A cue write on a file that is not a WAV must not lose the sidecar edit.
+func TestPatchTakeKeepsFlagsWhenTheCueWriteFails(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_fake.wav") // deliberately not a real WAV
+
+	if w := patch(t, r, "jam_fake.wav", `{"flags":[{"frame":5}]}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	m := audio.ReadMeta(filepath.Join(dir, "jam_fake.wav"))
+	if len(m.Flags) != 1 {
+		t.Errorf("flags = %+v, want the flag kept despite the cue failure", m.Flags)
+	}
+}
+
+// The spec requires a cue-write failure surfaced on the PATCH response, not
+// just logged: the sidecar already saved, so this is the only way the caller
+// learns the WAV's cue chunk is now stale against it. The 200 status is kept
+// on purpose -- the sidecar write did succeed.
+func TestPatchTakeSurfacesTheCueErrorOnTheResponse(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_fake.wav") // deliberately not a real WAV
+
+	w := patch(t, r, "jam_fake.wav", `{"flags":[{"frame":5}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		CueError string `json:"cue_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.CueError == "" {
+		t.Error("cue_error = \"\", want a message: the cue write failed and the PATCH must say so")
+	}
+	if strings.Contains(body.CueError, dir) {
+		t.Errorf("cue_error = %q, leaks the take's absolute path", body.CueError)
+	}
+}
+
+// A successful cue write must not leave a stale cue_error behind for the
+// client to trip over.
+func TestPatchTakeHasNoCueErrorWhenTheWriteSucceeds(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		CueError string `json:"cue_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.CueError != "" {
+		t.Errorf("cue_error = %q, want empty", body.CueError)
+	}
+}
+
+func TestPatchTakeRejectsTooManyFlags(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 100000)
+
+	var sb strings.Builder
+	sb.WriteString(`{"flags":[`)
+	for i := 0; i <= 512; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `{"frame":%d}`, i)
+	}
+	sb.WriteString(`]}`)
+
+	if w := patch(t, r, "jam_flags.wav", sb.String()); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestPatchTakeRejectsANegativeFlagFrame(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":-1}]}`); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+// Flag.Label exists only so a future migration needs no schema change --
+// nothing writes it today, and it must not become an unbounded free-text
+// channel into the sidecar by routing around sanitizeLabel.
+func TestPatchTakeStripsFlagLabel(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10,"label":"not a feature yet"}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	m := audio.ReadMeta(filepath.Join(dir, "jam_flags.wav"))
+	if len(m.Flags) != 1 || m.Flags[0].Label != "" {
+		t.Errorf("flags = %+v, want the label stripped", m.Flags)
+	}
+}
+
+// Valid frames on a 1000-frame take are 0..999: WriteCues itself rejects
+// frame == frames with "out of range", so 1000 is the exact off-by-one this
+// whole feature already turns on (see Capture.MarkNow).
+func TestPatchTakeRejectsAFlagPastTheEndOfTheTake(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":1000}]}`); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a frame at the take's length", w.Code)
+	}
+}
+
+// A rejected patch must leave both halves of the take's state exactly as a
+// prior successful save left them -- not a sidecar that moved on while the
+// WAV kept the previous save's now-mismatched cues.
+func TestPatchTakeRejectedFlagLeavesExistingStateUnchanged(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":100},{"frame":900}]}`); w.Code != http.StatusOK {
+		t.Fatalf("seed patch: status = %d, want 200", w.Code)
+	}
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":1000}]}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+
+	cues, err := audio.ReadCues(wav)
+	if err != nil {
+		t.Fatalf("ReadCues: %v", err)
+	}
+	if len(cues) != 2 || cues[0] != 100 || cues[1] != 900 {
+		t.Errorf("cues = %v, want [100 900] unchanged by the rejected patch", cues)
+	}
+
+	m := audio.ReadMeta(wav)
+	if len(m.Flags) != 2 || m.Flags[0].Frame != 100 || m.Flags[1].Frame != 900 {
+		t.Errorf("sidecar flags = %+v, want unchanged by the rejected patch", m.Flags)
+	}
+}
+
+// Task 5's reviewer traced the worst case of PATCH having no mutex around
+// WriteCues as lost cues with intact audio, never a corrupt file, because
+// riffExtent clamps end to the real file size. This does not assert which
+// flags win -- that's genuinely unspecified under a race, and would flake --
+// only two things that must hold no matter which write physically lands
+// last: every PATCH is answered (none 500s under the race), and the audio
+// itself -- DataBytes, which WriteCues never touches -- is byte-identical
+// before and after.
+//
+// Each goroutine writes a different number of flags (i+1) so the goroutines
+// produce cue chunks of different lengths at the same file offset. Same-length
+// writes never exercise WriteCues's shrink/grow/Truncate path, since nothing
+// then needs to move the tail; only a length mismatch does.
+func TestConcurrentPatchesLeaveTheTakeParseable(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeRealTake(t, dir, "jam_concurrent.wav", 100000)
+
+	before, err := audio.ReadWAVInfo(wav)
+	if err != nil {
+		t.Fatalf("ReadWAVInfo before: %v", err)
+	}
+
+	const n = 8
+	var wg sync.WaitGroup
+	codes := make([]int, n) // one slot per goroutine; no shared write, no race
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			var sb strings.Builder
+			sb.WriteString(`{"flags":[`)
+			for j := 0; j <= i; j++ {
+				if j > 0 {
+					sb.WriteString(",")
+				}
+				fmt.Fprintf(&sb, `{"frame":%d}`, i*1000+j)
+			}
+			sb.WriteString(`]}`)
+			codes[i] = patch(t, r, "jam_concurrent.wav", sb.String()).Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("goroutine %d: status = %d, want 200", i, code)
+		}
+	}
+
+	if _, err := audio.ReadWAVInfo(wav); err != nil {
+		t.Fatalf("ReadWAVInfo after concurrent PATCHes: %v", err)
+	}
+	if _, err := audio.ReadCues(wav); err != nil {
+		t.Fatalf("ReadCues after concurrent PATCHes: %v", err)
+	}
+
+	after, err := audio.ReadWAVInfo(wav)
+	if err != nil {
+		t.Fatalf("ReadWAVInfo after: %v", err)
+	}
+	if after.DataBytes != before.DataBytes {
+		t.Errorf("DataBytes = %d, want unchanged %d: a cue race must never touch the audio", after.DataBytes, before.DataBytes)
 	}
 }
