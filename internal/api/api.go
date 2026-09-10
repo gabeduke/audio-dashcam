@@ -567,10 +567,26 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 					fmt.Sprintf("a take may carry at most %d flags", maxTakeFlags))
 				return
 			}
-			for _, f := range fl {
-				if f.Frame < 0 {
+			for i := range fl {
+				if fl[i].Frame < 0 {
 					writeErr(w, http.StatusBadRequest, "flag frames must not be negative")
 					return
+				}
+				fl[i].Label = "" // not a feature yet; the field exists for a future migration only
+			}
+			// An impossible flag must not reach the sidecar either: reject the
+			// whole patch here rather than letting WriteCues bail out below and
+			// leave the WAV carrying whatever cue points a previous save wrote,
+			// silently mismatched against the sidecar this request just stored.
+			if info, err := audio.ReadWAVInfo(wav); err == nil {
+				if bpf := int64(info.Channels * info.BitsPerSample / 8); bpf > 0 {
+					frames := info.DataBytes / bpf
+					for _, f := range fl {
+						if f.Frame >= frames {
+							writeErr(w, http.StatusBadRequest, "flag frame is past the end of the take")
+							return
+						}
+					}
 				}
 			}
 			m.Flags = audio.NormalizeFlags(fl)

@@ -702,7 +702,13 @@ func TestDeleteFlagAllClearsThem(t *testing.T) {
 func TestEnvelopeCarriesFlagAges(t *testing.T) {
 	r, cap, _ := newFlagAPI(t)
 	cap.Ring().WriteFrames(make([]int32, 2*48000*2)) // 2s of audio
-	cap.Flags().Mark(48000)                          // 1s in, so 1s old
+	// Deliberately asymmetric: a mark at 48000 (half the 96000-frame ring)
+	// would have age (96000-48000)/48000 = 1.0 and position 48000/48000 =
+	// 1.0 too, so an implementation that reported each mark's raw position
+	// instead of its age -- exactly the mistake liveFlagAges' doc comment
+	// exists to head off -- would pass by coincidence. 24000 makes age (1.5s)
+	// and position (0.5s) disagree, so that bug fails this instead.
+	cap.Flags().Mark(24000)
 
 	body := getEnvelope(t, r, "?buckets=16")
 	flags, ok := body["flags"].([]any)
@@ -710,8 +716,8 @@ func TestEnvelopeCarriesFlagAges(t *testing.T) {
 		t.Fatalf("flags = %v, want one age", body["flags"])
 	}
 	age, _ := flags[0].(float64)
-	if age < 0.9 || age > 1.1 {
-		t.Errorf("age = %f, want about 1.0", age)
+	if age < 1.4 || age > 1.6 {
+		t.Errorf("age = %f, want about 1.5", age)
 	}
 }
 
@@ -818,32 +824,125 @@ func TestPatchTakeRejectsANegativeFlagFrame(t *testing.T) {
 	}
 }
 
+// Flag.Label exists only so a future migration needs no schema change --
+// nothing writes it today, and it must not become an unbounded free-text
+// channel into the sidecar by routing around sanitizeLabel.
+func TestPatchTakeStripsFlagLabel(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10,"label":"not a feature yet"}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	m := audio.ReadMeta(filepath.Join(dir, "jam_flags.wav"))
+	if len(m.Flags) != 1 || m.Flags[0].Label != "" {
+		t.Errorf("flags = %+v, want the label stripped", m.Flags)
+	}
+}
+
+// Valid frames on a 1000-frame take are 0..999: WriteCues itself rejects
+// frame == frames with "out of range", so 1000 is the exact off-by-one this
+// whole feature already turns on (see Capture.MarkNow).
+func TestPatchTakeRejectsAFlagPastTheEndOfTheTake(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":1000}]}`); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a frame at the take's length", w.Code)
+	}
+}
+
+// A rejected patch must leave both halves of the take's state exactly as a
+// prior successful save left them -- not a sidecar that moved on while the
+// WAV kept the previous save's now-mismatched cues.
+func TestPatchTakeRejectedFlagLeavesExistingStateUnchanged(t *testing.T) {
+	r, dir := newTestAPI(t)
+	wav := writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":100},{"frame":900}]}`); w.Code != http.StatusOK {
+		t.Fatalf("seed patch: status = %d, want 200", w.Code)
+	}
+
+	if w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":1000}]}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+
+	cues, err := audio.ReadCues(wav)
+	if err != nil {
+		t.Fatalf("ReadCues: %v", err)
+	}
+	if len(cues) != 2 || cues[0] != 100 || cues[1] != 900 {
+		t.Errorf("cues = %v, want [100 900] unchanged by the rejected patch", cues)
+	}
+
+	m := audio.ReadMeta(wav)
+	if len(m.Flags) != 2 || m.Flags[0].Frame != 100 || m.Flags[1].Frame != 900 {
+		t.Errorf("sidecar flags = %+v, want unchanged by the rejected patch", m.Flags)
+	}
+}
+
 // Task 5's reviewer traced the worst case of PATCH having no mutex around
 // WriteCues as lost cues with intact audio, never a corrupt file, because
 // riffExtent clamps end to the real file size. This does not assert which
-// flags win -- that's genuinely unspecified under a race -- only that the
-// take stays a valid WAV with a readable cue chunk no matter which write
-// physically lands last.
+// flags win -- that's genuinely unspecified under a race, and would flake --
+// only two things that must hold no matter which write physically lands
+// last: every PATCH is answered (none 500s under the race), and the audio
+// itself -- DataBytes, which WriteCues never touches -- is byte-identical
+// before and after.
+//
+// Each goroutine writes a different number of flags (i+1) so the goroutines
+// produce cue chunks of different lengths at the same file offset. Same-length
+// writes never exercise WriteCues's shrink/grow/Truncate path, since nothing
+// then needs to move the tail; only a length mismatch does.
 func TestConcurrentPatchesLeaveTheTakeParseable(t *testing.T) {
 	r, dir := newTestAPI(t)
 	wav := writeRealTake(t, dir, "jam_concurrent.wav", 100000)
 
+	before, err := audio.ReadWAVInfo(wav)
+	if err != nil {
+		t.Fatalf("ReadWAVInfo before: %v", err)
+	}
+
 	const n = 8
 	var wg sync.WaitGroup
+	codes := make([]int, n) // one slot per goroutine; no shared write, no race
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			body := fmt.Sprintf(`{"flags":[{"frame":%d},{"frame":%d}]}`, i, i+50000)
-			patch(t, r, "jam_concurrent.wav", body)
+			var sb strings.Builder
+			sb.WriteString(`{"flags":[`)
+			for j := 0; j <= i; j++ {
+				if j > 0 {
+					sb.WriteString(",")
+				}
+				fmt.Fprintf(&sb, `{"frame":%d}`, i*1000+j)
+			}
+			sb.WriteString(`]}`)
+			codes[i] = patch(t, r, "jam_concurrent.wav", sb.String()).Code
 		}(i)
 	}
 	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("goroutine %d: status = %d, want 200", i, code)
+		}
+	}
 
 	if _, err := audio.ReadWAVInfo(wav); err != nil {
 		t.Fatalf("ReadWAVInfo after concurrent PATCHes: %v", err)
 	}
 	if _, err := audio.ReadCues(wav); err != nil {
 		t.Fatalf("ReadCues after concurrent PATCHes: %v", err)
+	}
+
+	after, err := audio.ReadWAVInfo(wav)
+	if err != nil {
+		t.Fatalf("ReadWAVInfo after: %v", err)
+	}
+	if after.DataBytes != before.DataBytes {
+		t.Errorf("DataBytes = %d, want unchanged %d: a cue race must never touch the audio", after.DataBytes, before.DataBytes)
 	}
 }
