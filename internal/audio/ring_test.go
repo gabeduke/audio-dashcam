@@ -69,13 +69,45 @@ func TestSnapshotAtClampsToWhatIsBuffered(t *testing.T) {
 	}
 }
 
+// TestSnapshotAtWrapsAroundRingBoundary exercises the wraparound branch where
+// the snapshot data straddles the ring's circular boundary. The second memcpy
+// is required to reassemble the window.
+func TestSnapshotAtWrapsAroundRingBoundary(t *testing.T) {
+	r := NewRing(4, 1)
+	// Write frames valued 1..6; the ring wraps after 4 frames.
+	// Buffer state after write: [5,6,3,4] with writePos=2.
+	in := make([]int32, 6)
+	for i := range in {
+		in[i] = int32(i + 1)
+	}
+	r.WriteFrames(in)
+
+	// SnapshotAt(4) must return the 4 newest frames: 3,4,5,6
+	data, got, end := r.SnapshotAt(4)
+	if got != 4 {
+		t.Fatalf("frames = %d, want 4", got)
+	}
+	if end != 6 {
+		t.Errorf("endFrame = %d, want 6", end)
+	}
+	want := []int32{3, 4, 5, 6}
+	for i, v := range want {
+		if data[i] != v {
+			t.Errorf("data[%d] = %d, want %d", i, data[i], v)
+		}
+	}
+}
+
 // The whole point of SnapshotAt: the copy and its position must describe the
 // same instant. If they were read separately a concurrent write could slip
 // between them and every flag in the window would be off by that much.
+// The data itself must agree with its reported position: the last sample in
+// the window must match the absolute frame the window ends at.
 func TestSnapshotAtIsConsistentUnderConcurrentWrites(t *testing.T) {
 	r := NewRing(1000, 1)
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
+	var frameCounter uint64
 
 	wg.Add(1)
 	go func() {
@@ -86,15 +118,27 @@ func TestSnapshotAtIsConsistentUnderConcurrentWrites(t *testing.T) {
 			case <-stop:
 				return
 			default:
+				// Stamp each frame with its sequence number so we can verify
+				// the data agrees with the reported position.
+				for i := range block {
+					block[i] = int32(frameCounter + uint64(i) + 1)
+				}
 				r.WriteFrames(block)
+				frameCounter += uint64(len(block))
 			}
 		}
 	}()
 
 	for i := 0; i < 500; i++ {
-		_, got, end := r.SnapshotAt(16)
+		data, got, end := r.SnapshotAt(16)
 		if uint64(got) > end {
 			t.Fatalf("window of %d frames ends at absolute frame %d: the copy outruns the counter", got, end)
+		}
+		// The last sample in the window must match the absolute end position.
+		// If the counter were read outside the lock, a concurrent write would
+		// shift the window and this check would catch it immediately.
+		if got > 0 && uint64(data[got-1]) != end {
+			t.Fatalf("window ends at %d but its last sample is %d: data and position disagree", end, data[got-1])
 		}
 	}
 	close(stop)
