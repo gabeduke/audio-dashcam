@@ -12,6 +12,14 @@ import (
 // cueRecordBytes is the size of one RIFF cue point record.
 const cueRecordBytes = 24
 
+// cueChunkMaxBytes bounds how large a declared "cue " chunk we'll trust
+// enough to read. Writes here cap at 512 flags (about 12KB); anything far
+// larger cannot be a cue chunk this app wrote. Reading it anyway would size
+// an allocation off a corrupted (or adversarial) disk value -- for example a
+// "data" chunk id with one bit flipped into "cue ", carrying the data
+// chunk's own, possibly gigabyte-scale, size along with it.
+const cueChunkMaxBytes = 1 << 20 // 1 MiB
+
 // ReadCues returns the sample offsets of a WAV's cue points, ascending. A file
 // with no cue chunk yields an empty slice and no error.
 func ReadCues(path string) ([]uint64, error) {
@@ -41,7 +49,11 @@ func ReadCues(path string) ([]uint64, error) {
 		if size < 0 || pos+8+size > end {
 			break
 		}
-		if id == "cue " {
+		// A cue chunk larger than any legitimate write is treated as noise
+		// rather than read, so a corrupted or flipped chunk id can't turn
+		// into a multi-hundred-megabyte allocation. Fall through to the same
+		// skip-and-keep-walking path used for chunks we don't recognise.
+		if id == "cue " && size <= cueChunkMaxBytes {
 			buf := make([]byte, size)
 			if _, err := io.ReadFull(f, buf); err != nil {
 				return nil, fmt.Errorf("reading cue chunk: %w", err)
@@ -59,6 +71,13 @@ func parseCueChunk(buf []byte) ([]uint64, error) {
 	}
 	le := binary.LittleEndian
 	n := le.Uint32(buf[0:4])
+	// n comes off disk independently of buf's own (already-bounded) length,
+	// so a corrupted count must not size this allocation: clamp it to how
+	// many records buf could actually hold before reserving capacity for
+	// them. Without this, a single corrupted dword can ask for gigabytes.
+	if max := (len(buf) - 4) / cueRecordBytes; int64(n) > int64(max) {
+		n = uint32(max)
+	}
 	out := make([]uint64, 0, n)
 	for i := uint32(0); i < n; i++ {
 		rec := 4 + int(i)*cueRecordBytes
@@ -223,6 +242,32 @@ func WriteCues(path string, offsets []uint64) error {
 	}
 	defer f.Close()
 
+	return writeCueChunk(f, dataEnd, offs)
+}
+
+// cueFile is the subset of *os.File that writeCueChunk needs. The seam
+// exists so a test can record the exact call sequence: the write order is
+// the entire crash-safety property (see writeCueChunk), and without
+// something to intercept the calls nothing pins it -- a refactor could
+// silently reorder the writes and every existing test would stay green,
+// because they only ever inspect the file after WriteCues returns
+// successfully, never the sequence that got it there. *os.File already
+// satisfies this.
+type cueFile interface {
+	WriteAt(b []byte, off int64) (int, error)
+	Truncate(size int64) error
+	Sync() error
+	Stat() (os.FileInfo, error)
+}
+
+// writeCueChunk performs the on-disk write sequence that makes a crash
+// harmless at any point: patch the RIFF size *down* first (so the file
+// immediately reads as a valid cue-less WAV and anything at or past dataEnd
+// falls outside the RIFF extent), write the chunk into that now-ignored
+// region, then patch the RIFF size back *up* to include it. Each step is
+// fsynced before the next begins. Finally, any tail left by a longer
+// previous cue chunk is truncated away.
+func writeCueChunk(f cueFile, dataEnd int64, offs []uint64) error {
 	// 1. Shrink the RIFF extent so anything at or past dataEnd is ignored.
 	if err := patchRIFFSize(f, dataEnd); err != nil {
 		return err
@@ -265,7 +310,7 @@ func WriteCues(path string, offsets []uint64) error {
 }
 
 // patchRIFFSize rewrites the 4-byte size field so the RIFF form ends at end.
-func patchRIFFSize(f *os.File, end int64) error {
+func patchRIFFSize(f cueFile, end int64) error {
 	var sz [4]byte
 	binary.LittleEndian.PutUint32(sz[:], uint32(end-8))
 	_, err := f.WriteAt(sz[:], 4)
