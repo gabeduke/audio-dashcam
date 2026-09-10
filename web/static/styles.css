@@ -508,11 +508,37 @@ main {
 }
 .take-bpm-input:focus { outline: none; }
 
-.wave { height: 48px; margin-bottom: 9px; }
+.wave { position: relative; height: 48px; margin-bottom: 9px; }
 .wave.pending {
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
   background: var(--panel); border-radius: 7px;
+}
+
+/* Flags on a saved take, positioned over the waveform by frame fraction.
+   Points, not ranges, so plain absolutely-positioned ticks rather than a
+   WaveSurfer region plugin -- see the ribbon's .rb-flag for the live version
+   of the same idea. The layer ignores clicks so they reach the wave
+   underneath (which adds a flag); a tick re-enables pointer events on itself
+   to stay clickable for removal. */
+.take-flags {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.take-flag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--flag);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.take-flag:hover {
+  width: 4px;
+  margin-left: -2px;
 }
 
 .take-actions { display: flex; align-items: center; gap: 7px; }

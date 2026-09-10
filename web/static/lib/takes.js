@@ -170,6 +170,21 @@ export class TakesList {
     row.playBtn.addEventListener('click', () => this.togglePlay(row));
     row.delBtn.addEventListener('click', () => this.confirmDelete(row));
 
+    // Attached once, here, rather than in mountWave: mountWave can run more
+    // than once for a row (it's guarded, but callers don't know that), and a
+    // second listener would turn one click into two flags. row.waveEl is the
+    // same element across a wave's whole life, mounted or not.
+    row.waveEl.addEventListener('click', (e) => {
+      if (e.target.classList.contains('take-flag')) return; // removal handled by the tick itself
+      const t = row.data;
+      const duration = t.duration_seconds || 0;
+      if (!duration) return; // a take whose sidecar is still landing has no frame axis yet
+      const r = row.waveEl.getBoundingClientRect();
+      const frac = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 0.999999);
+      const frame = Math.floor(frac * duration * (t.sample_rate || 48000));
+      this.setFlags(row, [...(t.flags || []), { frame }]);
+    });
+
     row.starBtn.addEventListener('click', async () => {
       const next = !row.data.starred;
       row.starBtn.disabled = true;
@@ -323,6 +338,52 @@ export class TakesList {
     if (t.has_peaks && !row.ws && !row.mounting && this.isVisible(row.el)) {
       this.mountWave(row);
     }
+
+    this.renderFlags(row);
+  }
+
+  // Draws every flag on this take as a tick over the waveform, at
+  // frame / (duration * sample_rate) of the container's width. Runs from
+  // updateRow, so every refresh redraws the layer from row.data rather than
+  // patching it incrementally -- there is never a stale tick left behind.
+  renderFlags(row) {
+    const t = row.data;
+    let layer = row.waveEl.querySelector('.take-flags');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'take-flags';
+      row.waveEl.appendChild(layer);
+    }
+    layer.textContent = '';
+
+    // duration_seconds or sample_rate can be absent or zero while a take's
+    // sidecar is still being written; without a frame axis there is nowhere
+    // sane to draw a tick, so skip the take rather than divide by zero.
+    const totalFrames = (t.duration_seconds || 0) * (t.sample_rate || 48000);
+    if (!totalFrames) return;
+
+    for (const f of t.flags || []) {
+      const tick = document.createElement('div');
+      tick.className = 'take-flag';
+      tick.style.left = `${((f.frame / totalFrames) * 100).toFixed(3)}%`;
+      tick.title = 'click to remove';
+      tick.addEventListener('click', (e) => {
+        e.stopPropagation(); // otherwise the wave's own click handler reads this as a new flag
+        this.setFlags(row, (t.flags || []).filter((x) => x.frame !== f.frame));
+      });
+      layer.appendChild(tick);
+    }
+  }
+
+  async setFlags(row, flags) {
+    try {
+      // patchTake refreshes the list, which calls updateRow -> renderFlags
+      // for every row, so the ticks redraw from the server's own answer
+      // rather than from what was just clicked.
+      await this.patchTake(row.name, { flags });
+    } catch (e) {
+      this.onToast?.(`Could not update flags: ${e.message}`, 'bad');
+    }
   }
 
   isVisible(el) {
@@ -404,6 +465,13 @@ export class TakesList {
       if (this.playing === row.name) this.playing = null;
       row.playBtn.textContent = 'Play';
     });
+
+    // row.waveEl.textContent was just cleared to give WaveSurfer an empty
+    // container, which also erased any flag layer an earlier updateRow had
+    // drawn into the "pending" placeholder. Redraw it now that the container
+    // holds the wave, or existing flags would stay invisible until the next
+    // poll.
+    this.renderFlags(row);
 
     row.ws = ws;
     row.audio = audio;
