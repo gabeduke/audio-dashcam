@@ -222,7 +222,7 @@ range, matching bento.
 
 | Endpoint | Change |
 |---|---|
-| `POST /api/flag` | Place a live mark at now. Returns `{frame, age_seconds}` so the ribbon can draw it without waiting for the next poll. `409` if capture is unhealthy — there is no audio to mark. |
+| `POST /api/flag` | Place a live mark at now. Returns `{frame, age_seconds}` so the ribbon can draw it without waiting for the next poll. `409` **only when the ring is empty** — see below. |
 | `DELETE /api/flag` | `?frame=N` removes one, `?all=1` clears. Backs undo of a mistap. |
 | `GET /api/envelope` | Response gains `flags: [ages]`, in seconds-ago, matching the axis the ribbon already thinks in. The ribbon polls this already, so no new poll is added. |
 | `PATCH /api/take` | Gains `flags`, a full replacement of the take's array. Rewrites the sidecar and the WAV's cue chunk. Capped at 512 per take. |
@@ -240,9 +240,19 @@ range, matching bento.
 
 ## Failure behaviour
 
-- **Capture unhealthy when Mark is pressed:** `409`, and the button shows the
-  rejection. Marking silence that does not exist would produce a flag pointing
-  at nothing.
+- **Capture unhealthy when Mark is pressed: the flag is still placed**, at the
+  newest frame the ring holds. Rejecting here would be wrong, and the reason is
+  observed rather than theoretical: on 2026-09-10 the EP-136 was powered off
+  while the ring still held a full 15 minutes of real audio, and it stayed that
+  way for the entire session. `capture_healthy: false` means *no new audio is
+  arriving*, not *there is no audio* — and marking a moment in audio you can
+  still capture is exactly the point of the feature.
+- **Ring genuinely empty when Mark is pressed:** `409`, and the button shows the
+  rejection. This is the only case where there is nothing to mark, and it is the
+  same condition `Save` already reports as `ErrNoAudio`.
+- **Repeated Marks while capture is dead** all resolve to the same frame,
+  because `totalFrames` stops advancing. `FlagStore` deduplicates on insert, so
+  this collapses to one flag rather than a stack of identical ones.
 - **Cue write fails after the sidecar is written:** the take keeps its flags in
   `.meta.json` and the UI still shows them; the WAV simply lacks cues. The
   error is logged and surfaced on the PATCH response. Metadata is the source of
@@ -261,7 +271,10 @@ range, matching bento.
   concurrent writes, with `-race`.
 - `Snapshot` still behaves identically for existing callers.
 - `FlagStore`: marks age out at exactly the ring boundary; the 256 cap drops
-  oldest-first; remove and clear behave.
+  oldest-first; remove and clear behave; duplicate frames collapse to one.
+- **Mark while capture is unhealthy but the ring is non-empty places a flag** at
+  the newest frame; Mark against an empty ring returns `409`; repeated Marks
+  with a frozen `totalFrames` collapse to a single flag.
 - Translation: a flag inside the window, one outside it, one exactly at
   `start`, one exactly at `endFrame-1`, and an empty ring.
 - Flags survive a save and appear in the sidecar in ascending order.
