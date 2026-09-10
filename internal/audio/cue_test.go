@@ -293,7 +293,10 @@ func TestReadCuesSkipsAnImplausiblyLargeCueChunk(t *testing.T) {
 		t.Fatalf("ReadCues: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("got %v, want empty: an oversized cue chunk must be refused, not trusted", got)
+		// Print the count, not the slice: without the cap, a chunk built
+		// with a larger record count would parse into a slice long enough
+		// to bury the actual failure in the test output.
+		t.Fatalf("got %d cues, want none: an oversized cue chunk must be refused, not trusted", len(got))
 	}
 }
 
