@@ -109,7 +109,7 @@ func TestClearEmptiesTheStore(t *testing.T) {
 
 func TestActiveOnAnEmptyStoreReturnsNothing(t *testing.T) {
 	s := NewFlagStore(MaxLiveFlags)
-	if got := s.Active(100, 900); len(got) != 0 {
-		t.Errorf("Active = %v, want empty", got)
+	if got := s.Active(100, 900); got != nil {
+		t.Errorf("Active = %v, want nil", got)
 	}
 }
