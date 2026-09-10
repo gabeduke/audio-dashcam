@@ -71,6 +71,8 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/trigger", a.handleTrigger).Methods(http.MethodPost)
 	r.HandleFunc("/api/delete", a.handleDelete).Methods(http.MethodDelete)
 	r.HandleFunc("/api/take", a.handleTakePatch).Methods(http.MethodPatch)
+	r.HandleFunc("/api/flag", a.handleFlagPost).Methods(http.MethodPost)
+	r.HandleFunc("/api/flag", a.handleFlagDelete).Methods(http.MethodDelete)
 	r.HandleFunc("/api/download", a.handleDownload).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/peaks", a.handlePeaks).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
@@ -216,6 +218,84 @@ func (a *API) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "name": name})
 }
 
+// maxTakeFlags bounds what a single take may carry.
+const maxTakeFlags = 512
+
+// handleFlagPost marks the newest frame the ring holds.
+//
+// It deliberately does not require a healthy capture. capture_healthy false
+// means no new audio is arriving, not that there is none: an interface can be
+// powered off with a full 15-minute buffer still in memory, and marking a
+// moment you can still capture is the point of the feature. The only refusal is
+// an empty ring, which is the same condition Save reports as ErrNoAudio.
+func (a *API) handleFlagPost(w http.ResponseWriter, r *http.Request) {
+	if a.cap == nil {
+		writeErr(w, http.StatusServiceUnavailable, "capture not available")
+		return
+	}
+	// MarkNow owns the off-by-one: see Capture.MarkNow. It reports false only
+	// for a ring that has never held audio.
+	frame, ok := a.cap.MarkNow()
+	if !ok {
+		writeErr(w, http.StatusConflict, "no audio buffered yet")
+		return
+	}
+	newest := a.cap.Ring().TotalFrames() - 1
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"frame":       frame,
+		"age_seconds": float64(newest-frame) / float64(a.cfg.SampleRate),
+	})
+}
+
+func (a *API) handleFlagDelete(w http.ResponseWriter, r *http.Request) {
+	if a.cap == nil {
+		writeErr(w, http.StatusServiceUnavailable, "capture not available")
+		return
+	}
+	if r.URL.Query().Get("all") != "" {
+		a.cap.Flags().Clear()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+		return
+	}
+	raw := r.URL.Query().Get("frame")
+	if raw == "" {
+		writeErr(w, http.StatusBadRequest, "frame or all is required")
+		return
+	}
+	frame, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "frame must be a non-negative integer")
+		return
+	}
+	if !a.cap.Flags().Remove(frame) {
+		writeErr(w, http.StatusNotFound, "no such flag")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// liveFlagAges reports live marks as ages in seconds. The ribbon thinks in
+// ages, so the conversion belongs here rather than in the client, which would
+// otherwise need the ring's frame counter too.
+func (a *API) liveFlagAges() []float64 {
+	// Non-nil so it always marshals as [] rather than null, and nil-safe on
+	// Capture because handleEnvelope is reachable with no Capture attached --
+	// which is exactly how the existing envelope tests construct the API.
+	if a.cap == nil {
+		return []float64{}
+	}
+	ring := a.cap.Ring()
+	now := ring.TotalFrames()
+	marks := a.cap.Flags().Active(now, uint64(a.cfg.RingFrames()))
+
+	out := make([]float64, 0, len(marks)) // non-nil so it marshals as []
+	for _, m := range marks {
+		out = append(out, float64(now-m)/float64(a.cfg.SampleRate))
+	}
+	return out
+}
+
 func (a *API) handleDownload(w http.ResponseWriter, r *http.Request) {
 	path, name, err := a.safeMediaPath(r.URL.Query().Get("file"))
 	if err != nil {
@@ -268,6 +348,7 @@ type envelopeResponse struct {
 	// writes, and Go marshals []byte this way with no conversion.
 	Buckets       []byte    `json:"buckets"`
 	SignalSeconds []float64 `json:"signal_seconds"`
+	Flags         []float64 `json:"flags"`
 }
 
 // handleEnvelope serves the buffer ribbon: log-spaced buckets over the whole
@@ -326,6 +407,7 @@ func (a *API) handleEnvelope(w http.ResponseWriter, r *http.Request) {
 		EdgeSeconds:     a.env.EdgeSecondsEffective(),
 		Buckets:         a.env.Buckets(buckets),
 		SignalSeconds:   sig,
+		Flags:           a.liveFlagAges(),
 	})
 }
 
@@ -401,12 +483,13 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	var body struct {
 		Label   *string         `json:"label"`
 		Starred *bool           `json:"starred"`
 		Trim    json.RawMessage `json:"trim"`
 		BPM     json.RawMessage `json:"bpm"`
+		Flags   json.RawMessage `json:"flags"`
 	}
 	if err := dec.Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -466,6 +549,34 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// RawMessage like trim and bpm: absent, null and a value are three states.
+	// A submitted array replaces the take's flags wholesale.
+	flagsChanged := false
+	if body.Flags != nil {
+		flagsChanged = true
+		if string(body.Flags) == "null" {
+			m.Flags = nil
+		} else {
+			var fl []audio.Flag
+			if err := json.Unmarshal(body.Flags, &fl); err != nil {
+				writeErr(w, http.StatusBadRequest, "invalid flags")
+				return
+			}
+			if len(fl) > maxTakeFlags {
+				writeErr(w, http.StatusBadRequest,
+					fmt.Sprintf("a take may carry at most %d flags", maxTakeFlags))
+				return
+			}
+			for _, f := range fl {
+				if f.Frame < 0 {
+					writeErr(w, http.StatusBadRequest, "flag frames must not be negative")
+					return
+				}
+			}
+			m.Flags = audio.NormalizeFlags(fl)
+		}
+	}
+
 	if err := audio.WriteMeta(wav, m); err != nil {
 		switch {
 		case errors.Is(err, audio.ErrNewerSidecar):
@@ -481,15 +592,28 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The sidecar is the source of truth and is already written; a cue failure
+	// is reported but never rolls the sidecar back.
+	if flagsChanged {
+		offsets := make([]uint64, 0, len(m.Flags))
+		for _, f := range m.Flags {
+			offsets = append(offsets, uint64(f.Frame))
+		}
+		if err := audio.WriteCues(wav, offsets); err != nil {
+			log.Printf("cue points for %s: %v", name, err)
+		}
+	}
+
 	// Explicit rather than returning audio.Meta: its omitempty tags would drop
 	// the very fields a clear-to-empty patch just changed, and version is
 	// internal.
 	writeJSON(w, http.StatusOK, struct {
-		Label   string      `json:"label"`
-		Starred bool        `json:"starred"`
-		Trim    *audio.Trim `json:"trim"`
-		BPM     *float64    `json:"bpm"`
-	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM})
+		Label   string       `json:"label"`
+		Starred bool         `json:"starred"`
+		Trim    *audio.Trim  `json:"trim"`
+		BPM     *float64     `json:"bpm"`
+		Flags   []audio.Flag `json:"flags"`
+	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags})
 }
 
 // sanitizeLabel prepares a user-supplied label for storage. It strips control
