@@ -27,6 +27,7 @@ type Capture struct {
 	cfg    *config.Config
 	src    Source
 	ring   *Ring
+	flags  *FlagStore
 	levels *Levels
 	env    *Envelope
 
@@ -49,6 +50,7 @@ func NewCapture(cfg *config.Config, src Source) *Capture {
 		cfg:    cfg,
 		src:    src,
 		ring:   NewRing(cfg.RingFrames(), cfg.Channels),
+		flags:  NewFlagStore(MaxLiveFlags),
 		levels: NewLevels(cfg.Channels, cfg.SampleRate, levelBinMillis),
 		free:   make(chan []int32, blockPoolSize),
 		filled: make(chan []int32, blockPoolSize),
@@ -69,8 +71,27 @@ func NewCapture(cfg *config.Config, src Source) *Capture {
 	return c
 }
 
-func (c *Capture) Ring() *Ring     { return c.ring }
-func (c *Capture) Levels() *Levels { return c.levels }
+func (c *Capture) Ring() *Ring       { return c.ring }
+func (c *Capture) Flags() *FlagStore { return c.flags }
+func (c *Capture) Levels() *Levels   { return c.levels }
+
+// MarkNow records a live mark at the newest frame the ring actually holds,
+// reporting false when there is no audio to mark.
+//
+// The -1 is the whole point of this method existing rather than callers doing
+// it themselves. TotalFrames is a count, so valid frame indices are
+// 0..TotalFrames()-1, while flagsForWindow's window is half-open
+// [start, end) with end == TotalFrames(). A mark placed at TotalFrames()
+// would sit one past the last frame of every take that contains it and be
+// dropped at save time -- silently losing exactly the flag the user just
+// asked for.
+func (c *Capture) MarkNow() (uint64, bool) {
+	total := c.ring.TotalFrames()
+	if total == 0 {
+		return 0, false
+	}
+	return c.flags.Mark(total - 1), true
+}
 
 func (c *Capture) Envelope() *Envelope { return c.env }
 

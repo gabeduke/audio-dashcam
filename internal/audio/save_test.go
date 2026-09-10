@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/gabeduke/hindsight/internal/config"
 )
 
 // writeFakeTake creates a file that ListTakes will pick up. The WAV header is
@@ -249,5 +251,68 @@ func TestListTakesReportsBPM(t *testing.T) {
 	}
 	if *takes[0].BPM != 92.5 {
 		t.Errorf("BPM = %v, want 92.5", *takes[0].BPM)
+	}
+}
+
+func TestFlagsForWindowTranslatesToTakeRelativeFrames(t *testing.T) {
+	// Window covers absolute frames [1000, 1400).
+	got := flagsForWindow([]uint64{1000, 1200, 1399}, 1000, 1400)
+	want := []int64{0, 200, 399}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %d flags", got, len(want))
+	}
+	for i := range want {
+		if got[i].Frame != want[i] {
+			t.Errorf("flag[%d].Frame = %d, want %d", i, got[i].Frame, want[i])
+		}
+	}
+}
+
+func TestFlagsForWindowExcludesMarksOutsideIt(t *testing.T) {
+	got := flagsForWindow([]uint64{999, 1400, 5000}, 1000, 1400)
+	if len(got) != 0 {
+		t.Errorf("got %+v, want none: 999 predates the window and 1400 is past its last frame", got)
+	}
+}
+
+func TestFlagsForWindowOnAnEmptyWindow(t *testing.T) {
+	if got := flagsForWindow([]uint64{5}, 0, 0); got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestFlagsForWindowWithNoMarks(t *testing.T) {
+	if got := flagsForWindow(nil, 1000, 2000); got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestMarkNowOnAnEmptyRingReportsFalse(t *testing.T) {
+	c := NewCapture(&config.Config{Channels: 2, SampleRate: 48000, RingSeconds: 10, SaveChannels: []int{0, 1}}, nil)
+	if _, ok := c.MarkNow(); ok {
+		t.Error("MarkNow on an empty ring = true, want false")
+	}
+}
+
+// The regression this pins: a mark placed at TotalFrames() rather than
+// TotalFrames()-1 lands one past the last frame of the very take that should
+// contain it, and flagsForWindow's half-open window drops it. Marking and then
+// capturing is the feature's core path.
+func TestAMarkPlacedNowSurvivesAnImmediateCapture(t *testing.T) {
+	c := NewCapture(&config.Config{Channels: 2, SampleRate: 48000, RingSeconds: 10, SaveChannels: []int{0, 1}}, nil)
+	c.Ring().WriteFrames(make([]int32, 1000*2))
+
+	frame, ok := c.MarkNow()
+	if !ok {
+		t.Fatal("MarkNow reported no audio")
+	}
+
+	_, got, end := c.Ring().SnapshotAt(0) // the whole ring, as Save(0) does
+	flags := flagsForWindow(c.Flags().Active(end, 480000), end-uint64(got), end)
+	if len(flags) != 1 {
+		t.Fatalf("flags in the captured window = %+v, want the mark at %d to survive", flags, frame)
+	}
+	if flags[0].Frame != int64(got-1) {
+		t.Errorf("flag frame = %d, want %d (the take's last frame)", flags[0].Frame, got-1)
 	}
 }

@@ -97,7 +97,7 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if seconds > 0 {
 		frames = int(seconds * float64(cfg.SampleRate))
 	}
-	data, gotFrames := s.cap.Ring().Snapshot(frames)
+	data, gotFrames, endFrame := s.cap.Ring().SnapshotAt(frames)
 	// The end of the captured window, in wall-clock terms. The ring stores
 	// frames and a counter and carries no clock of its own, so this is derived
 	// rather than read: now, minus the snapshot's duration.
@@ -111,6 +111,15 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if gotFrames == 0 {
 		return "", ErrNoAudio
 	}
+
+	// Read the marks against the same window the snapshot describes. Active
+	// also prunes anything that has aged out, which is the only way a live mark
+	// ever leaves the store.
+	winStart := endFrame - uint64(gotFrames)
+	takeFlags := flagsForWindow(
+		s.cap.Flags().Active(endFrame, uint64(s.cap.cfg.RingFrames())),
+		winStart, endFrame,
+	)
 
 	s.mu.Lock()
 	s.saving = true
@@ -139,6 +148,7 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if err := WritePeaks(peaksPath(wavPath), peaks); err != nil {
 		log.Printf("[!] peaks for %s: %v", name, err)
 	}
+	_ = takeFlags // written to the sidecar in the next task
 
 	stampTempo(wavPath, s.tempoSource(), capturedAt,
 		time.Duration(float64(gotFrames)/float64(cfg.SampleRate)*float64(time.Second)))
@@ -151,6 +161,24 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	go s.prune()
 
 	return name, nil
+}
+
+// flagsForWindow maps live marks, which are absolute ring frames, into frames
+// relative to a take covering absolute [start, end). Marks outside the window
+// are not in this take and are simply skipped -- they stay in the store until
+// they age out of the ring.
+func flagsForWindow(marks []uint64, start, end uint64) []Flag {
+	if end <= start {
+		return nil
+	}
+	var out []Flag
+	for _, m := range marks {
+		if m < start || m >= end {
+			continue
+		}
+		out = append(out, Flag{Frame: int64(m - start)})
+	}
+	return out
 }
 
 // stampTempo merges a BPM into a take's sidecar, if the clock has one to give.
