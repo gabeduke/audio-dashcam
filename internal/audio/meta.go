@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -22,6 +23,40 @@ const MetaVersion = 1
 type Trim struct {
 	StartFrame int64 `json:"start_frame"`
 	EndFrame   int64 `json:"end_frame"`
+}
+
+// Flag marks a moment of interest inside a take, in frames from its first
+// frame. Frames rather than seconds so the mark is sample-exact, survives as an
+// integer, and lines up with the RIFF cue points other tools read.
+//
+// Label is carried so that adding labels later needs no schema change; nothing
+// writes it today.
+type Flag struct {
+	Frame int64  `json:"frame"`
+	Label string `json:"label,omitempty"`
+}
+
+// NormalizeFlags returns flags sorted by frame with duplicates and negative
+// frames removed. The first occurrence of a frame wins, so a label already
+// attached to it is not lost to a later bare mark.
+func NormalizeFlags(in []Flag) []Flag {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Flag, 0, len(in))
+	seen := make(map[int64]bool, len(in))
+	for _, f := range in {
+		if f.Frame < 0 || seen[f.Frame] {
+			continue
+		}
+		seen[f.Frame] = true
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Frame < out[j].Frame })
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Meta is the per-take sidecar. Every field but Version is optional: an absent
@@ -43,6 +78,10 @@ type Meta struct {
 	// rock-steady against a project set to 92 -- so this is a starting point
 	// the owner overrides, never a fact.
 	BPM *float64 `json:"bpm,omitempty"`
+
+	// Flags mark moments of interest, in frames from the take's first frame.
+	// Optional and additive, like BPM, so it needs no MetaVersion bump.
+	Flags []Flag `json:"flags,omitempty"`
 }
 
 // ErrNewerSidecar reports a sidecar written by a build that knew fields this
@@ -92,6 +131,7 @@ func WriteMeta(wav string, m Meta) error {
 		return fmt.Errorf("%w: sidecar is version %d, this build writes %d", ErrNewerSidecar, m.Version, MetaVersion)
 	}
 	m.Version = MetaVersion
+	m.Flags = NormalizeFlags(m.Flags)
 
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
