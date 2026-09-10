@@ -61,6 +61,7 @@ export class Ribbon {
     wrap.appendChild(this.svg);
 
     this.markLayer = add(wrap, 'div', 'rb-layer');
+    this.flagLayer = add(wrap, 'div', 'rb-layer');
     add(wrap, 'div', 'rb-scrim');
     this.labelLayer = add(wrap, 'div', 'rb-layer');
     add(wrap, 'div', 'rb-now');
@@ -180,6 +181,16 @@ export class Ribbon {
       label.style.transform = i === tiers.length - 1 ? 'translateX(0)' : 'translateX(-50%)';
       this.labelLayer.appendChild(label);
     });
+
+    // Live marks, drawn on the same log axis as everything else. The server
+    // sends ages in seconds so the client needs no knowledge of ring frames.
+    // `d.flags` is absent on an older response shape, hence the fallback.
+    this.flagLayer.textContent = '';
+    for (const age of d.flags || []) {
+      const flag = add(this.flagLayer, 'div', 'rb-flag');
+      flag.style.left = `${leftPct(age).toFixed(2)}%`;
+      flag.title = `flag at ${fmtDur(age)} ago`;
+    }
 
     this.readout.textContent = this.readoutText(d, abs(sel));
   }

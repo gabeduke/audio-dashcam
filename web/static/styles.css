@@ -14,6 +14,7 @@
   --accent-dk: #0f7f5f;
   --warn:      #fbbf24;
   --danger:    #f87171;
+  --flag:      #ffb020;
   --radius:    14px;
   --tap:       48px;
   /* 10px top padding + 24px logo + 10px bottom padding + 1px border. The
@@ -151,6 +152,29 @@ main {
 .rb-mark { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(38, 50, 74, .9); }
 .rb-mark.on { background: rgba(52, 211, 153, .55); }
 
+/* A live flag: a point, not a range, so it is a positioned tick rather than a
+   library region. The flag glyph on top makes it findable at a glance among
+   the tier marks, which share this layer's general shape but not its color. */
+.rb-flag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--flag);
+  box-shadow: 0 0 4px rgba(255, 176, 32, 0.6);
+  pointer-events: none;
+}
+.rb-flag::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--flag);
+}
+
 .rb-scrim {
   position: absolute; top: 0; left: 0; right: 0; height: 22px;
   background: linear-gradient(to bottom, rgba(6, 11, 22, .92), rgba(6, 11, 22, 0));
@@ -282,6 +306,17 @@ main {
   opacity: 0.85;
 }
 
+/* Mark rides beside the duration segments rather than adding a row of its
+   own -- see the .stat comment above for how thin the landscape-phone
+   margin above Capture already is. align-items:stretch makes Mark match
+   .seg's height exactly, so this row costs nothing vertically. */
+.capture-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.capture-row .seg { flex: 1 1 auto; min-width: 0; }
+
 .seg {
   display: grid;
   grid-auto-flow: column;
@@ -303,8 +338,36 @@ main {
   border-radius: 8px;
   cursor: pointer;
   transition: background 140ms, color 140ms;
+  /* Mark now shares this row and narrows .seg's share of it. A clipped
+     "Full 15m" is a far better failure than a wrapped one, which would grow
+     the row and could push Capture toward the fold -- the same defensive
+     choice .stat .k makes above. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 2px;
 }
 .seg button[aria-pressed="true"] { background: var(--panel); color: var(--accent); }
+
+.mark-btn {
+  flex: none;
+  width: 50px;
+  border: 1px solid var(--flag);
+  border-radius: 11px;
+  background: var(--panel-2);
+  color: var(--flag);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms, opacity 140ms;
+}
+.mark-btn:active { background: rgba(255, 176, 32, 0.16); }
+.mark-btn[disabled] {
+  border-color: var(--line);
+  color: var(--ink-faint);
+  cursor: default;
+}
 
 .capture-btn {
   margin-top: 12px;
