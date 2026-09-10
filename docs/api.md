@@ -1,6 +1,6 @@
 # HTTP API
 
-Nine routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
+Eleven routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
 else the server answers is the static UI under `web/static`.
 
 There is **no authentication and no rate limiting**. `DELETE /api/delete`
@@ -15,7 +15,9 @@ internet.
 | `GET /api/envelope` | The buffer ribbon's amplitude envelope over the whole ring |
 | `POST /api/trigger?seconds=N` | Save the last N seconds; `0` is the whole ring |
 | `GET /api/jams` | Takes, starred first then newest first. Sends an ETag |
-| `PATCH /api/take?file=` | Edit a take's label, star, trim and BPM |
+| `PATCH /api/take?file=` | Edit a take's label, star, trim, BPM and flags |
+| `POST /api/flag` | Mark a moment of interest at the ring's newest frame |
+| `DELETE /api/flag` | Remove one live mark (`?frame=`), or every one (`?all=1`) |
 | `GET /api/peaks?file=` | Precomputed waveform, so phones do not download audio to draw one |
 | `GET /api/download?file=[&dl=1]` | Stream inline, or force a download |
 | `DELETE /api/delete?file=` | Remove a take and its sidecars |
@@ -107,7 +109,8 @@ not just what the browser has been open for.
   "buffered_seconds": 4.99,
   "edge_seconds": 10,
   "buckets": "AAAAAAAAAOA=",
-  "signal_seconds": [4.99, 4.99]
+  "signal_seconds": [4.99, 4.99],
+  "flags": [{ "age_seconds": 1.5, "frame": 24000 }]
 }
 ```
 
@@ -122,6 +125,11 @@ whether a 7-minute capture would actually contain anything.
 
 `edge_seconds` is the age at the ribbon's right edge and the newest age its
 logarithmic axis can address.
+
+`flags` is every live mark still in the ring, oldest first. `age_seconds`
+positions the tick on the ribbon's log axis, in the same currency the rest of
+the envelope speaks; `frame` is the mark's absolute ring frame, which the
+client sends back to `DELETE /api/flag?frame=` to undo a mistap.
 
 Returns 503 if the envelope is unavailable, 400 if `buckets` or `spans` will
 not parse. `Cache-Control: no-store`.
@@ -170,7 +178,8 @@ how a take stays in reach once newer ones have pushed it down.
   "preview_name": "jam_2026-09-09_145852_preview.mp3",
   "label": "",
   "starred": false,
-  "bpm": 96
+  "bpm": 96,
+  "flags": [{ "frame": 100 }, { "frame": 900 }]
 }]
 ```
 
@@ -199,12 +208,19 @@ curl -X PATCH 'http://127.0.0.1:5000/api/take?file=jam_2026-09-09_145852.wav' \
 | `starred` | bool | |
 | `trim` | `{start_frame, end_frame}` or `null` | `start_frame` must be `>= 0` **and** `end_frame` must exceed `start_frame`; `null` clears |
 | `bpm` | number or `null` | 20–400, rounded to two decimals; rejects NaN and ±Inf; `null` clears |
+| `flags` | `[{frame, label}]` or `null` | A full replacement of the take's flags. Capped at 512; `frame` must be `>= 0` and less than the take's frame count; `null` clears. `label` is stripped — the field exists for a future migration, nothing writes it yet |
 
 The response is the merged result:
 
 ```json
-{ "label": "warm-up", "starred": true, "trim": null, "bpm": 128 }
+{ "label": "warm-up", "starred": true, "trim": null, "bpm": 128, "flags": [] }
 ```
+
+If `flags` changed, the sidecar write is also mirrored into the WAV as RIFF
+`cue ` points. That second write can fail on its own — a take whose layout
+`WriteCues` does not recognise, say — without the sidecar edit failing with
+it: the response carries a non-empty `cue_error` when it does, and the status
+stays 200, because the sidecar (the source of truth) already saved.
 
 | Status | When |
 |---|---|
@@ -218,6 +234,50 @@ The tempo range is deliberately far wider than any interface will produce,
 because the stamped BPM is a device's guess rather than ground truth — see the
 MIDI section of [architecture.md](architecture.md). The field exists to be
 overridden, including for takes whose clock reading was confidently wrong.
+
+## `POST /api/flag`
+
+Marks a moment of interest at the newest frame the ring holds — the live
+counterpart to a take's `flags`. It does not require a healthy capture:
+`capture_healthy: false` means no new audio is arriving, not that there is
+none, and marking a moment in audio you can still capture is the point of the
+feature.
+
+```json
+{ "frame": 43199, "age_seconds": 0 }
+```
+
+`frame` is the mark's absolute ring frame — the same value `/api/envelope`
+later reports it at — so the caller can draw the tick immediately rather than
+waiting for the next poll.
+
+| Status | When |
+|---|---|
+| 409 | The ring is empty. This is the only case with nothing to mark |
+| 503 | Capture is not attached to this build at all |
+
+Marking the same frame twice collapses to one flag, which is what happens on
+repeated presses while capture is dead and the ring's frame counter has
+stopped advancing.
+
+## `DELETE /api/flag`
+
+Removes live marks. Backs undo of a mistap.
+
+| Query | Notes |
+|---|---|
+| `frame` | Removes the one mark at this absolute frame |
+| `all` | Clears every live mark. Only the literal values `1` or `true` trigger it — `?all=0` and `?all=false` are left alone, not read as truthy |
+
+```json
+{ "status": "removed" }
+```
+
+| Status | When |
+|---|---|
+| 400 | Neither `frame` nor `all` given, or `frame` does not parse |
+| 404 | No mark at that `frame` |
+| 503 | Capture is not attached to this build at all |
 
 ## `GET /api/peaks?file=`
 
