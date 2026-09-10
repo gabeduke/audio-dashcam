@@ -253,7 +253,11 @@ func (a *API) handleFlagDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "capture not available")
 		return
 	}
-	if r.URL.Query().Get("all") != "" {
+	// Only "1" or "true" trigger the destructive clear-everything path. This is
+	// stricter than most of this codebase's boolean query params on purpose:
+	// ?all=0 or ?all=false reading as true would wipe every live flag on what
+	// looks, at the call site, like an explicit "no".
+	if all := r.URL.Query().Get("all"); all == "1" || all == "true" {
 		a.cap.Flags().Clear()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 		return
@@ -275,23 +279,35 @@ func (a *API) handleFlagDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
-// liveFlagAges reports live marks as ages in seconds. The ribbon thinks in
-// ages, so the conversion belongs here rather than in the client, which would
-// otherwise need the ring's frame counter too.
-func (a *API) liveFlagAges() []float64 {
+// flagEnvelope is one live mark as the client needs it: an age, in seconds,
+// for drawing the tick on the ribbon's log axis (the same currency the rest
+// of the envelope speaks), and the absolute frame, so a click on that tick can
+// address it with DELETE /api/flag?frame=N without a second round trip.
+type flagEnvelope struct {
+	AgeSeconds float64 `json:"age_seconds"`
+	Frame      uint64  `json:"frame"`
+}
+
+// liveFlags reports every live mark's age and frame. The age conversion
+// belongs here rather than in the client, which would otherwise need the
+// ring's frame counter too.
+func (a *API) liveFlags() []flagEnvelope {
 	// Non-nil so it always marshals as [] rather than null, and nil-safe on
 	// Capture because handleEnvelope is reachable with no Capture attached --
 	// which is exactly how the existing envelope tests construct the API.
 	if a.cap == nil {
-		return []float64{}
+		return []flagEnvelope{}
 	}
 	ring := a.cap.Ring()
 	now := ring.TotalFrames()
 	marks := a.cap.Flags().Active(now, uint64(a.cfg.RingFrames()))
 
-	out := make([]float64, 0, len(marks)) // non-nil so it marshals as []
+	out := make([]flagEnvelope, 0, len(marks)) // non-nil so it marshals as []
 	for _, m := range marks {
-		out = append(out, float64(now-m)/float64(a.cfg.SampleRate))
+		out = append(out, flagEnvelope{
+			AgeSeconds: float64(now-m) / float64(a.cfg.SampleRate),
+			Frame:      m,
+		})
 	}
 	return out
 }
@@ -346,9 +362,9 @@ type envelopeResponse struct {
 	// Buckets is base64 rather than a JSON array: 400 buckets is 536 chars
 	// against ~1600, it is the encoding scripts/take-envelope.py already
 	// writes, and Go marshals []byte this way with no conversion.
-	Buckets       []byte    `json:"buckets"`
-	SignalSeconds []float64 `json:"signal_seconds"`
-	Flags         []float64 `json:"flags"`
+	Buckets       []byte         `json:"buckets"`
+	SignalSeconds []float64      `json:"signal_seconds"`
+	Flags         []flagEnvelope `json:"flags"`
 }
 
 // handleEnvelope serves the buffer ribbon: log-spaced buckets over the whole
@@ -407,7 +423,7 @@ func (a *API) handleEnvelope(w http.ResponseWriter, r *http.Request) {
 		EdgeSeconds:     a.env.EdgeSecondsEffective(),
 		Buckets:         a.env.Buckets(buckets),
 		SignalSeconds:   sig,
-		Flags:           a.liveFlagAges(),
+		Flags:           a.liveFlags(),
 	})
 }
 
@@ -609,7 +625,10 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The sidecar is the source of truth and is already written; a cue failure
-	// is reported but never rolls the sidecar back.
+	// is reported -- on the response, not just the log, since the caller has no
+	// other way to learn the WAV's cue chunk is now stale against a sidecar that
+	// already saved -- but it never rolls the sidecar back.
+	cueErr := ""
 	if flagsChanged {
 		offsets := make([]uint64, 0, len(m.Flags))
 		for _, f := range m.Flags {
@@ -617,6 +636,11 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := audio.WriteCues(wav, offsets); err != nil {
 			log.Printf("cue points for %s: %v", name, err)
+			// Generic on purpose: a WriteCues failure can be a *PathError naming
+			// the take's absolute path, and the sidecar write above already
+			// succeeded -- the caller needs to know the export is stale, not the
+			// filesystem layout.
+			cueErr = "flags saved, but the take's cue points could not be updated"
 		}
 	}
 
@@ -624,12 +648,13 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 	// the very fields a clear-to-empty patch just changed, and version is
 	// internal.
 	writeJSON(w, http.StatusOK, struct {
-		Label   string       `json:"label"`
-		Starred bool         `json:"starred"`
-		Trim    *audio.Trim  `json:"trim"`
-		BPM     *float64     `json:"bpm"`
-		Flags   []audio.Flag `json:"flags"`
-	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags})
+		Label    string       `json:"label"`
+		Starred  bool         `json:"starred"`
+		Trim     *audio.Trim  `json:"trim"`
+		BPM      *float64     `json:"bpm"`
+		Flags    []audio.Flag `json:"flags"`
+		CueError string       `json:"cue_error,omitempty"`
+	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags, CueError: cueErr})
 }
 
 // sanitizeLabel prepares a user-supplied label for storage. It strips control

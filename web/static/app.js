@@ -278,7 +278,7 @@ el.markBtn.addEventListener('click', mark);
 
 // ---------------------------------------------------------------- live
 
-ribbon = new Ribbon(el.vizWrap);
+ribbon = new Ribbon(el.vizWrap, { onToast: toast });
 
 connectLive({
   onFrame: (f) => {

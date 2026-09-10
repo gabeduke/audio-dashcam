@@ -154,7 +154,9 @@ main {
 
 /* A live flag: a point, not a range, so it is a positioned tick rather than a
    library region. The flag glyph on top makes it findable at a glance among
-   the tier marks, which share this layer's general shape but not its color. */
+   the tier marks, which share this layer's general shape but not its color.
+   Clickable -- it backs undo of a mistap (DELETE /api/flag?frame=N) -- so
+   .rb-layer's blanket pointer-events: none is overridden back to auto here. */
 .rb-flag {
   position: absolute;
   top: 0;
@@ -163,7 +165,8 @@ main {
   margin-left: -1px;
   background: var(--flag);
   box-shadow: 0 0 4px rgba(255, 176, 32, 0.6);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 .rb-flag::before {
   content: '';
@@ -173,6 +176,17 @@ main {
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
   border-top: 5px solid var(--flag);
+}
+/* A transparent hit box, well past the 2px visual bar: a hairline is nearly
+   impossible to land a tap on, and this widens the target without touching
+   how the tick itself looks. */
+.rb-flag::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  right: -6px;
 }
 
 .rb-scrim {
@@ -508,7 +522,9 @@ main {
 }
 .take-bpm-input:focus { outline: none; }
 
-.wave { position: relative; height: 48px; margin-bottom: 9px; }
+/* manipulation: a flag is placed with a double-tap, and without this a phone
+   reads that as a request to zoom the page instead of the wave. */
+.wave { position: relative; height: 48px; margin-bottom: 9px; touch-action: manipulation; }
 .wave.pending {
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 11px; color: var(--ink-faint);

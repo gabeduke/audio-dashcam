@@ -699,25 +699,51 @@ func TestDeleteFlagAllClearsThem(t *testing.T) {
 	}
 }
 
+// ?all=0 must not clear anything: only "1" or "true" trigger the destructive
+// path. A bare `!= ""` check would read this as truthy and wipe every live
+// flag on what looks, at the call site, like an explicit "no". No frame is
+// given either, so a correct implementation falls through to "frame or all is
+// required" (400) rather than silently succeeding.
+func TestDeleteFlagAllZeroDoesNotClear(t *testing.T) {
+	r, cap, _ := newFlagAPI(t)
+	cap.Flags().Mark(1)
+	cap.Flags().Mark(2)
+
+	if w := do(t, r, http.MethodDelete, "/api/flag?all=0"); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (%s)", w.Code, w.Body.String())
+	}
+	if cap.Flags().Len() != 2 {
+		t.Errorf("Len = %d, want 2: ?all=0 must not clear", cap.Flags().Len())
+	}
+}
+
 func TestEnvelopeCarriesFlagAges(t *testing.T) {
 	r, cap, _ := newFlagAPI(t)
 	cap.Ring().WriteFrames(make([]int32, 2*48000*2)) // 2s of audio
 	// Deliberately asymmetric: a mark at 48000 (half the 96000-frame ring)
 	// would have age (96000-48000)/48000 = 1.0 and position 48000/48000 =
 	// 1.0 too, so an implementation that reported each mark's raw position
-	// instead of its age -- exactly the mistake liveFlagAges' doc comment
-	// exists to head off -- would pass by coincidence. 24000 makes age (1.5s)
-	// and position (0.5s) disagree, so that bug fails this instead.
+	// instead of its age -- exactly the mistake liveFlags' doc comment exists
+	// to head off -- would pass by coincidence. 24000 makes age (1.5s) and
+	// position (0.5s) disagree, so that bug fails this instead.
 	cap.Flags().Mark(24000)
 
 	body := getEnvelope(t, r, "?buckets=16")
 	flags, ok := body["flags"].([]any)
 	if !ok || len(flags) != 1 {
-		t.Fatalf("flags = %v, want one age", body["flags"])
+		t.Fatalf("flags = %v, want one entry", body["flags"])
 	}
-	age, _ := flags[0].(float64)
+	entry, ok := flags[0].(map[string]any)
+	if !ok {
+		t.Fatalf("flags[0] = %v, want an object", flags[0])
+	}
+	age, _ := entry["age_seconds"].(float64)
 	if age < 1.4 || age > 1.6 {
-		t.Errorf("age = %f, want about 1.5", age)
+		t.Errorf("age_seconds = %f, want about 1.5", age)
+	}
+	frame, _ := entry["frame"].(float64)
+	if frame != 24000 {
+		t.Errorf("frame = %v, want 24000", entry["frame"])
 	}
 }
 
@@ -794,6 +820,53 @@ func TestPatchTakeKeepsFlagsWhenTheCueWriteFails(t *testing.T) {
 	m := audio.ReadMeta(filepath.Join(dir, "jam_fake.wav"))
 	if len(m.Flags) != 1 {
 		t.Errorf("flags = %+v, want the flag kept despite the cue failure", m.Flags)
+	}
+}
+
+// The spec requires a cue-write failure surfaced on the PATCH response, not
+// just logged: the sidecar already saved, so this is the only way the caller
+// learns the WAV's cue chunk is now stale against it. The 200 status is kept
+// on purpose -- the sidecar write did succeed.
+func TestPatchTakeSurfacesTheCueErrorOnTheResponse(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeTake(t, dir, "jam_fake.wav") // deliberately not a real WAV
+
+	w := patch(t, r, "jam_fake.wav", `{"flags":[{"frame":5}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		CueError string `json:"cue_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.CueError == "" {
+		t.Error("cue_error = \"\", want a message: the cue write failed and the PATCH must say so")
+	}
+	if strings.Contains(body.CueError, dir) {
+		t.Errorf("cue_error = %q, leaks the take's absolute path", body.CueError)
+	}
+}
+
+// A successful cue write must not leave a stale cue_error behind for the
+// client to trip over.
+func TestPatchTakeHasNoCueErrorWhenTheWriteSucceeds(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_flags.wav", 1000)
+
+	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		CueError string `json:"cue_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.CueError != "" {
+		t.Errorf("cue_error = %q, want empty", body.CueError)
 	}
 }
 
