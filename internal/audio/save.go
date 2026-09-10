@@ -148,7 +148,7 @@ func (s *Saver) Save(seconds float64) (string, error) {
 	if err := WritePeaks(peaksPath(wavPath), peaks); err != nil {
 		log.Printf("[!] peaks for %s: %v", name, err)
 	}
-	_ = takeFlags // written to the sidecar in the next task
+	stampFlags(wavPath, takeFlags)
 
 	stampTempo(wavPath, s.tempoSource(), capturedAt,
 		time.Duration(float64(gotFrames)/float64(cfg.SampleRate)*float64(time.Second)))
@@ -213,6 +213,36 @@ func stampTempo(wavPath string, src TempoSource, end time.Time, window time.Dura
 		return
 	}
 	log.Printf("[*] %s — %.2f BPM", filepath.Base(wavPath), bpm)
+}
+
+// stampFlags records a take's flags in its sidecar and mirrors them into the
+// WAV as cue points.
+//
+// Like stampTempo, this runs after the audio is safely on disk and must never
+// fail the save. The sidecar is the source of truth; the cue chunk is a derived
+// export, so a cue failure is logged and the flags are kept.
+func stampFlags(wavPath string, flags []Flag) {
+	flags = NormalizeFlags(flags)
+	if len(flags) == 0 {
+		return
+	}
+
+	m := ReadMeta(wavPath)
+	m.Flags = flags
+	if err := WriteMeta(wavPath, m); err != nil {
+		log.Printf("[!] flags for %s: %v", filepath.Base(wavPath), err)
+		return
+	}
+
+	offsets := make([]uint64, 0, len(flags))
+	for _, f := range flags {
+		offsets = append(offsets, uint64(f.Frame))
+	}
+	if err := WriteCues(wavPath, offsets); err != nil {
+		log.Printf("[!] cue points for %s: %v", filepath.Base(wavPath), err)
+		return
+	}
+	log.Printf("[*] %s — %d flag(s)", filepath.Base(wavPath), len(flags))
 }
 
 // makePreview renders the mp3 proxy. The channel mapping is explicit: a bare

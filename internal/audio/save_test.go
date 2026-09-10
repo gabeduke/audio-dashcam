@@ -3,6 +3,7 @@ package audio
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -314,5 +315,67 @@ func TestAMarkPlacedNowSurvivesAnImmediateCapture(t *testing.T) {
 	}
 	if flags[0].Frame != int64(got-1) {
 		t.Errorf("flag frame = %d, want %d (the take's last frame)", flags[0].Frame, got-1)
+	}
+}
+
+func TestStampFlagsWritesSidecarAndCues(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jam_stamp.wav")
+	data := make([]int32, 1000*2)
+	if _, err := WriteWAV(p, data, 2, []int{0, 1}, 48000); err != nil {
+		t.Fatalf("WriteWAV: %v", err)
+	}
+
+	stampFlags(p, []Flag{{Frame: 100}, {Frame: 900}})
+
+	m := ReadMeta(p)
+	if len(m.Flags) != 2 || m.Flags[0].Frame != 100 || m.Flags[1].Frame != 900 {
+		t.Errorf("sidecar flags = %+v, want frames 100 and 900", m.Flags)
+	}
+	cues, err := ReadCues(p)
+	if err != nil {
+		t.Fatalf("ReadCues: %v", err)
+	}
+	if len(cues) != 2 || cues[0] != 100 || cues[1] != 900 {
+		t.Errorf("cues = %v, want [100 900]", cues)
+	}
+}
+
+func TestStampFlagsWithNoneWritesNothing(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jam_none.wav")
+	data := make([]int32, 100*2)
+	if _, err := WriteWAV(p, data, 2, []int{0, 1}, 48000); err != nil {
+		t.Fatalf("WriteWAV: %v", err)
+	}
+	before, _ := os.Stat(p)
+
+	stampFlags(p, nil)
+
+	if m := ReadMeta(p); m.Flags != nil {
+		t.Errorf("Flags = %+v, want nil", m.Flags)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(p, ".wav") + ".meta.json"); err == nil {
+		t.Error("a sidecar was written for a take with no flags")
+	}
+	after, _ := os.Stat(p)
+	if after.Size() != before.Size() {
+		t.Errorf("file size changed from %d to %d", before.Size(), after.Size())
+	}
+}
+
+// A cue-write failure must leave the sidecar intact: metadata is the source of
+// truth and the WAV's cue chunk is a derived export.
+func TestStampFlagsKeepsTheSidecarWhenTheCueWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "jam_bad.wav")
+	// Not a WAV at all, so WriteCues must fail.
+	if err := os.WriteFile(p, []byte("not a riff file"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	stampFlags(p, []Flag{{Frame: 5}})
+
+	m := ReadMeta(p)
+	if len(m.Flags) != 1 || m.Flags[0].Frame != 5 {
+		t.Errorf("sidecar flags = %+v, want the flag kept despite the cue failure", m.Flags)
 	}
 }
