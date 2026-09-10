@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -53,6 +54,41 @@ func TestWriteThenReadCuesRoundTrips(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("cue[%d] = %d, want %d", i, got[i], want[i])
 		}
+	}
+}
+
+// TestBuildCueChunkGoldenBytes pins the exact byte layout of a cue chunk. The
+// round-trip tests above only prove ReadCues can undo what buildCueChunk did
+// -- they stay green even if fccDataChunk is written as zero (a RIFF spec
+// violation some readers reject) or if dwPosition and dwSampleOffset silently
+// mask each other, because ReadCues falls back from one field to the other.
+// This is the export contract for the whole feature, so it gets pinned byte
+// for byte instead.
+func TestBuildCueChunkGoldenBytes(t *testing.T) {
+	got := buildCueChunk([]uint64{0, 480})
+	want := []byte{
+		// chunk header
+		'c', 'u', 'e', ' ', // ckID
+		0x34, 0x00, 0x00, 0x00, // ckSize = 52 (4-byte count + 2 24-byte records), little-endian
+		// dwCuePoints
+		0x02, 0x00, 0x00, 0x00,
+		// record 1: offset 0
+		0x01, 0x00, 0x00, 0x00, // dwIdentifier = 1
+		0x00, 0x00, 0x00, 0x00, // dwPosition = 0
+		'd', 'a', 't', 'a', // fccChunk
+		0x00, 0x00, 0x00, 0x00, // dwChunkStart (unused: not wave-list compressed)
+		0x00, 0x00, 0x00, 0x00, // dwBlockStart (unused)
+		0x00, 0x00, 0x00, 0x00, // dwSampleOffset = 0
+		// record 2: offset 480
+		0x02, 0x00, 0x00, 0x00, // dwIdentifier = 2
+		0xe0, 0x01, 0x00, 0x00, // dwPosition = 480
+		'd', 'a', 't', 'a', // fccChunk
+		0x00, 0x00, 0x00, 0x00, // dwChunkStart (unused)
+		0x00, 0x00, 0x00, 0x00, // dwBlockStart (unused)
+		0xe0, 0x01, 0x00, 0x00, // dwSampleOffset = 480
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("buildCueChunk([0, 480]) =\n  % x\nwant\n  % x", got, want)
 	}
 }
 

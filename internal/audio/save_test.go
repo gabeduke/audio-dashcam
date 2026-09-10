@@ -384,6 +384,46 @@ func TestStampFlagsWithNoneWritesNothing(t *testing.T) {
 	}
 }
 
+// Save calls stampFlags then stampTempo, and each does its own
+// ReadMeta -> mutate -> WriteMeta. Correctness depends on that running
+// synchronously in this order: making either call asynchronous lets the two
+// read-modify-writes interleave, so one's read predates the other's write and
+// silently loses it. This goes through the real Saver rather than calling
+// stampFlags/stampTempo directly, so that a regression in Save's own call
+// order or synchronicity -- not just in the helpers themselves -- shows up
+// here. Nothing else in this file exercises both fields on one take.
+func TestSaveWritesFlagsAndTempoOnTheSameTake(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Channels:     2,
+		SampleRate:   48000,
+		RingSeconds:  10,
+		SaveChannels: []int{0, 1},
+		OutputDir:    dir,
+	}
+	cap := NewCapture(cfg, nil)
+	cap.Ring().WriteFrames(make([]int32, 1000*2))
+	if _, ok := cap.MarkNow(); !ok {
+		t.Fatal("MarkNow reported no audio")
+	}
+
+	saver := NewSaver(cap)
+	saver.SetTempoSource(&fakeTempo{bpm: 120, ok: true})
+
+	name, err := saver.Save(0)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	m := ReadMeta(filepath.Join(dir, name))
+	if len(m.Flags) != 1 {
+		t.Errorf("Flags = %+v, want the mark placed before Save to survive it", m.Flags)
+	}
+	if m.BPM == nil || *m.BPM != 120 {
+		t.Errorf("BPM = %v, want 120", m.BPM)
+	}
+}
+
 // A cue-write failure must leave the sidecar intact: metadata is the source of
 // truth and the WAV's cue chunk is a derived export.
 func TestStampFlagsKeepsTheSidecarWhenTheCueWriteFails(t *testing.T) {

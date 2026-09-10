@@ -145,11 +145,22 @@ func TestSnapshotAtIsConsistentUnderConcurrentWrites(t *testing.T) {
 	wg.Wait()
 }
 
+// All-zero frames pass for any implementation, right or wrong: an all-zero
+// input and a bug that skips the copy entirely (make([]int32, len(data)) and
+// nothing more) are indistinguishable, and neither catches a window built from
+// the wrong end of the buffer. Frames valued 1..5 pin both: Snapshot(3) must
+// return the newest three, in order, not the oldest three and not zeros.
 func TestSnapshotStillReturnsTwoValues(t *testing.T) {
 	r := NewRing(10, 1)
-	r.WriteFrames(make([]int32, 5))
+	r.WriteFrames([]int32{1, 2, 3, 4, 5})
 	data, got := r.Snapshot(3)
 	if got != 3 || len(data) != 3 {
-		t.Errorf("Snapshot = (%d values, %d frames), want (3, 3)", len(data), got)
+		t.Fatalf("Snapshot = (%d values, %d frames), want (3, 3)", len(data), got)
+	}
+	want := []int32{3, 4, 5}
+	for i := range want {
+		if data[i] != want[i] {
+			t.Fatalf("data = %v, want %v", data, want)
+		}
 	}
 }
