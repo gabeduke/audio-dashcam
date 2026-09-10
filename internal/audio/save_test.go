@@ -255,6 +255,28 @@ func TestListTakesReportsBPM(t *testing.T) {
 	}
 }
 
+// The take list is what the waveform overlay reads flags from (GET
+// /api/jams), a separate path from the sidecar PATCH stores them through, so
+// this locks in that ListTakes actually carries them across.
+func TestListTakesReportsFlags(t *testing.T) {
+	dir := t.TempDir()
+	wav := writeFakeTake(t, dir, "jam_a.wav", time.Minute)
+	if err := WriteMeta(wav, Meta{Flags: []Flag{{Frame: 100}, {Frame: 900}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	takes, err := ListTakes(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(takes) != 1 || len(takes[0].Flags) != 2 {
+		t.Fatalf("flags missing from the listing: %+v", takes)
+	}
+	if takes[0].Flags[0].Frame != 100 || takes[0].Flags[1].Frame != 900 {
+		t.Errorf("frames = %+v, want 100 then 900", takes[0].Flags)
+	}
+}
+
 func TestFlagsForWindowTranslatesToTakeRelativeFrames(t *testing.T) {
 	// Window covers absolute frames [1000, 1400).
 	got := flagsForWindow([]uint64{1000, 1200, 1399}, 1000, 1400)

@@ -317,6 +317,7 @@ type Take struct {
 	Starred bool     `json:"starred"`
 	Trim    *Trim    `json:"trim,omitempty"`
 	BPM     *float64 `json:"bpm,omitempty"`
+	Flags   []Flag   `json:"flags,omitempty"`
 }
 
 // ListTakes returns starred takes first, then the rest newest first. Duration
@@ -358,6 +359,7 @@ func ListTakes(dir string) ([]Take, error) {
 		t.Starred = m.Starred
 		t.Trim = m.Trim
 		t.BPM = m.BPM
+		t.Flags = m.Flags
 
 		out = append(out, t)
 	}
