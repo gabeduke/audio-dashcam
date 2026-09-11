@@ -47,22 +47,8 @@ func WriteSlice16(w io.Writer, path string, from, to int64) error {
 
 	bw := bufio.NewWriterSize(w, 1<<16)
 	le := binary.LittleEndian
-	var hdr [44]byte
 	dataBytes := uint32(total * int64(ch) * 2)
-	copy(hdr[0:4], "RIFF")
-	le.PutUint32(hdr[4:8], dataBytes+36)
-	copy(hdr[8:12], "WAVE")
-	copy(hdr[12:16], "fmt ")
-	le.PutUint32(hdr[16:20], 16)
-	le.PutUint16(hdr[20:22], 1)
-	le.PutUint16(hdr[22:24], uint16(ch))
-	le.PutUint32(hdr[24:28], uint32(info.SampleRate))
-	le.PutUint32(hdr[28:32], uint32(info.SampleRate*ch*2))
-	le.PutUint16(hdr[32:34], uint16(ch*2))
-	le.PutUint16(hdr[34:36], 16)
-	copy(hdr[36:40], "data")
-	le.PutUint32(hdr[40:44], dataBytes)
-	if _, err := bw.Write(hdr[:]); err != nil {
+	if err := writeWAVHeader(bw, dataBytes, ch, info.SampleRate, 16); err != nil {
 		return err
 	}
 

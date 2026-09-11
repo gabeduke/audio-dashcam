@@ -66,7 +66,7 @@ func WriteWAV(path string, data []int32, srcChannels int, pick []int, sampleRate
 	w := bufio.NewWriterSize(f, 1<<20)
 
 	dataBytes := uint32(frames * outCh * 4)
-	if err := writeWAVHeader(w, dataBytes, outCh, sampleRate); err != nil {
+	if err := writeWAVHeader(w, dataBytes, outCh, sampleRate, 32); err != nil {
 		return nil, err
 	}
 
@@ -95,21 +95,22 @@ func WriteWAV(path string, data []int32, srcChannels int, pick []int, sampleRate
 	return pk.finish(sampleRate, frames), nil
 }
 
-func writeWAVHeader(w *bufio.Writer, dataBytes uint32, channels, sampleRate int) error {
+func writeWAVHeader(w *bufio.Writer, dataBytes uint32, channels, sampleRate, bitsPerSample int) error {
 	le := binary.LittleEndian
 	var b [wavHeaderBytes]byte
 
+	bytesPerSample := bitsPerSample / 8
 	copy(b[0:4], "RIFF")
 	le.PutUint32(b[4:8], dataBytes+36)
 	copy(b[8:12], "WAVE")
 	copy(b[12:16], "fmt ")
-	le.PutUint32(b[16:20], 16)                            // fmt chunk size
-	le.PutUint16(b[20:22], 1)                             // PCM
-	le.PutUint16(b[22:24], uint16(channels))              //
-	le.PutUint32(b[24:28], uint32(sampleRate))            //
-	le.PutUint32(b[28:32], uint32(sampleRate*channels*4)) // byte rate
-	le.PutUint16(b[32:34], uint16(channels*4))            // block align
-	le.PutUint16(b[34:36], 32)                            // bits per sample
+	le.PutUint32(b[16:20], 16) // fmt chunk size
+	le.PutUint16(b[20:22], 1)  // PCM
+	le.PutUint16(b[22:24], uint16(channels))
+	le.PutUint32(b[24:28], uint32(sampleRate))
+	le.PutUint32(b[28:32], uint32(sampleRate*channels*bytesPerSample)) // byte rate
+	le.PutUint16(b[32:34], uint16(channels*bytesPerSample))            // block align
+	le.PutUint16(b[34:36], uint16(bitsPerSample))                      // bits per sample
 	copy(b[36:40], "data")
 	le.PutUint32(b[40:44], dataBytes)
 

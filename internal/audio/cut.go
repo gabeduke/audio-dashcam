@@ -109,7 +109,7 @@ func writeCutWAV(srcPath, outPath string, info WAVInfo, from, to, fade int64) er
 	}
 	defer f.Close()
 	w := bufio.NewWriterSize(f, 1<<18)
-	if err := writeWAVHeader(w, uint32(total*int64(ch)*4), ch, info.SampleRate); err != nil {
+	if err := writeWAVHeader(w, uint32(total*int64(ch)*4), ch, info.SampleRate, 32); err != nil {
 		return err
 	}
 	acc := newPeakAccumulator(ch, int(total))

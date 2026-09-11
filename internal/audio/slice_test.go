@@ -4,9 +4,36 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+// write16BitWAV hand-crafts a minimal 16-bit PCM WAV, since WriteWAV only
+// ever produces 32-bit files.
+func write16BitWAV(t *testing.T, path string, frames, channels, sampleRate int) {
+	t.Helper()
+	le := binary.LittleEndian
+	dataBytes := uint32(frames * channels * 2)
+	var hdr [44]byte
+	copy(hdr[0:4], "RIFF")
+	le.PutUint32(hdr[4:8], dataBytes+36)
+	copy(hdr[8:12], "WAVE")
+	copy(hdr[12:16], "fmt ")
+	le.PutUint32(hdr[16:20], 16)
+	le.PutUint16(hdr[20:22], 1)
+	le.PutUint16(hdr[22:24], uint16(channels))
+	le.PutUint32(hdr[24:28], uint32(sampleRate))
+	le.PutUint32(hdr[28:32], uint32(sampleRate*channels*2))
+	le.PutUint16(hdr[32:34], uint16(channels*2))
+	le.PutUint16(hdr[34:36], 16)
+	copy(hdr[36:40], "data")
+	le.PutUint32(hdr[40:44], dataBytes)
+	buf := append(hdr[:], make([]byte, dataBytes)...)
+	if err := os.WriteFile(path, buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWriteSlice16ProducesAFadedSixteenBitWAV(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "jam_s.wav")
@@ -50,5 +77,14 @@ func TestWriteSlice16Limits(t *testing.T) {
 	}
 	if err := WriteSlice16(&buf, p, 48000*61-10, 48000*61+1); !errors.Is(err, ErrRange) {
 		t.Errorf("past end: err = %v, want ErrRange", err)
+	}
+}
+
+func TestWriteSlice16RejectsNonThirtyTwoBitTakes(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jam_16.wav")
+	write16BitWAV(t, p, 100, 2, 48000)
+	var buf bytes.Buffer
+	if err := WriteSlice16(&buf, p, 0, 10); !errors.Is(err, ErrBitDepth) {
+		t.Errorf("err = %v, want ErrBitDepth", err)
 	}
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1177,5 +1178,37 @@ func TestSliceStreamsASixteenBitWAV(t *testing.T) {
 	}
 	if w := do(t, r, http.MethodGet, "/api/slice?file=jam_nope.wav&from=0&to=10"); w.Code != http.StatusNotFound {
 		t.Errorf("missing: status = %d, want 404", w.Code)
+	}
+}
+
+func TestSliceRejectsANonThirtyTwoBitTake(t *testing.T) {
+	r, dir := newTestAPI(t)
+	le := binary.LittleEndian
+	frames, channels, sampleRate := 100, 2, 48000
+	dataBytes := uint32(frames * channels * 2)
+	var hdr [44]byte
+	copy(hdr[0:4], "RIFF")
+	le.PutUint32(hdr[4:8], dataBytes+36)
+	copy(hdr[8:12], "WAVE")
+	copy(hdr[12:16], "fmt ")
+	le.PutUint32(hdr[16:20], 16)
+	le.PutUint16(hdr[20:22], 1)
+	le.PutUint16(hdr[22:24], uint16(channels))
+	le.PutUint32(hdr[24:28], uint32(sampleRate))
+	le.PutUint32(hdr[28:32], uint32(sampleRate*channels*2))
+	le.PutUint16(hdr[32:34], uint16(channels*2))
+	le.PutUint16(hdr[34:36], 16)
+	copy(hdr[36:40], "data")
+	le.PutUint32(hdr[40:44], dataBytes)
+	buf := append(hdr[:], make([]byte, dataBytes)...)
+	if err := os.WriteFile(filepath.Join(dir, "jam_16.wav"), buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, r, http.MethodGet, "/api/slice?file=jam_16.wav&from=0&to=10")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct == "audio/wav" {
+		t.Errorf("Content-Type = %q, want no audio/wav on a rejected slice", ct)
 	}
 }

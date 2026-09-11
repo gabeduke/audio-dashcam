@@ -613,6 +613,10 @@ func (a *API) handleSlice(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
+	if info.BitsPerSample != 32 {
+		writeErr(w, http.StatusBadRequest, "only 32-bit takes can be sliced")
+		return
+	}
 	if to > info.Frames() {
 		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
 		return
