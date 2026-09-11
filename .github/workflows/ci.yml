@@ -50,7 +50,7 @@ jobs:
       # The waveform page's geometry is pure JS with node's built-in runner;
       # no package.json, no dependencies.
       - name: JS unit tests
-        run: node --test web/static/lib/wave/
+        run: node --test 'web/static/lib/wave/*.test.js'
 
       - name: Release script tests
         run: ./scripts/test-release-scripts.sh
