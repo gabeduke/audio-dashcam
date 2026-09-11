@@ -211,8 +211,9 @@ export class WaveView {
     const p = this.pt(e);
     this.pointers.set(e.pointerId, p);
     // Two or more fingers is always a pinch: replacing this.gesture discards
-    // whatever the first finger had started (a pan, a handle drag) so a pinch
-    // never also pans. A third finger must not fall through to the hit test.
+    // whatever the first finger had started (a select, a handle drag) so a
+    // pinch never also selects. A third finger must not fall through to the
+    // hit test.
     if (this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
       this.gesture = { kind: 'pinch', dist: pinchDist(a, b), mid: (a.x + b.x) / 2, fpp: this.view.fpp, start: this.view.start };
@@ -230,7 +231,11 @@ export class WaveView {
       case 'region': this.gesture = { ...base, kind: 'moveRegion', region: { ...st.region } }; break;
       case 'downbeat': this.gesture = { ...base, kind: 'downbeat', grabOffset: p.x - frameToX(st.grid.downbeat, this.view) }; break;
       case 'flag': this.gesture = { ...base, kind: 'flag', flag: h.flag }; break;
-      default: this.gesture = { ...base, kind: 'pan' };
+      // A one-finger drag on bare waveform selects. Panning lives on the
+      // overview strip and in the two-finger gesture, so the one gesture a
+      // thumb reaches for on the couch makes the thing you want to share.
+      // prev is the region the drag started from: a sliver release restores it.
+      default: this.gesture = { ...base, kind: 'select', anchor: xToFrame(p.x, this.view), emitted: false, prev: st.region ? { ...st.region } : null };
     }
     // Only a bare-wave tap can be half of a double-tap; anything else breaks
     // the pair so a tap-then-flag-tap never lands an unwanted flag.
@@ -257,8 +262,17 @@ export class WaveView {
     const dx = p.x - g.x0;
     if (Math.abs(dx) > TAP_MOVE || Math.abs(p.y - g.y0) > TAP_MOVE) g.moved = true;
     switch (g.kind) {
-      case 'pan':
-        this.view.start = g.start - dx * this.view.fpp; this.clampView(); this.changed(); break;
+      case 'select': {
+        if (!g.moved) break;
+        const cur = xToFrame(p.x, this.view);
+        const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
+        g.emitted = true;
+        // The provisional clamp allows a region shorter than minLen while the
+        // finger is still moving, so the band tracks it from the first pixel;
+        // the minimum is enforced only on release.
+        this.emit('regionChange', { region: clampRegion(r, this.total, Math.max(1, Math.min(this.minLen, r.end - r.start))), final: false });
+        this.draw(); break;
+      }
       case 'handle': {
         const f = xToFrame(p.x - g.grabOffset, this.view);
         const r = { ...g.region, [g.edge]: f };
@@ -287,7 +301,7 @@ export class WaveView {
     const g = this.gesture;
     if (!g) return;
     // Dropping to one finger ends the pinch outright: the survivor does
-    // nothing until it too lifts, rather than panning from a stale x0.
+    // nothing until it too lifts, rather than selecting from a stale anchor.
     if (g.kind === 'pinch') { if (this.pointers.size < 2) this.gesture = null; return; }
     this.gesture = null;
     const st = this.getState();
@@ -306,8 +320,15 @@ export class WaveView {
         // so double-tapping a flag cannot stack a second flag on top of it.
         if (isTap) this.emit('selectFlag', { flag: g.flag });
         break;
-      case 'pan':
-        if (isTap) {
+      case 'select':
+        if (g.moved) {
+          const cur = xToFrame(p.x, this.view);
+          const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
+          if (r.end - r.start >= this.minLen) this.emit('regionChange', { region: clampRegion(r, this.total, this.minLen), final: true });
+          // A sliver: discard it and put back whatever region the drag began
+          // from, so a twitchy tap-drag does not destroy the take.
+          else if (g.emitted) this.emit('regionChange', { region: g.prev, final: true });
+        } else if (isTap) {
           const now = performance.now();
           if (this.lastTap && now - this.lastTap.t < TAP_MS && Math.hypot(p.x - this.lastTap.x, p.y - this.lastTap.y) < DOUBLE_TAP_MOVE) {
             this.lastTap = null;
@@ -324,11 +345,11 @@ export class WaveView {
   wheel(e) {
     e.preventDefault();
     const p = this.pt(e);
-    // ctrl/meta (and the synthetic ctrl of a trackpad pinch) zooms about the
-    // pointer; any other wheel pans, taking whichever axis moved -- a
-    // horizontal trackpad scroll and a plain vertical wheel both pan, which is
-    // the deliberate choice for a single-axis timeline.
-    if (e.ctrlKey || e.metaKey) this.zoomTo(this.view.fpp * Math.exp(e.deltaY * 0.01), p.x);
-    else this.panTo(this.view.start + (e.deltaX || e.deltaY) * this.view.fpp);
+    // Plain wheel zooms about the pointer: on a timeline that is the thing a
+    // mouse user reaches for first, and the overview strip covers panning.
+    // Shift, or a trackpad's horizontal axis, pans.
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if (e.shiftKey || horizontal) this.panTo(this.view.start + (horizontal ? e.deltaX : e.deltaY) * this.view.fpp);
+    else this.zoomTo(this.view.fpp * Math.exp(e.deltaY * 0.01), p.x);
   }
 }
