@@ -148,7 +148,7 @@ func TestRenderMP3Validates(t *testing.T) {
 	// through the exported constant instead -- covered in the API test with
 	// a long take. Here only the bit-depth guard remains:
 	p16 := filepath.Join(t.TempDir(), "jam_16.wav")
-	write16bitWAV(t, p16, 1000)
+	write16BitWAV(t, p16, 1000, 2, 48000)
 	if err := RenderMP3(context.Background(), &buf, []int{0, 1}, p16, 0, 100); !errors.Is(err, ErrBitDepth) {
 		t.Errorf("16-bit: %v, want ErrBitDepth", err)
 	}
@@ -185,7 +185,7 @@ func TestRenderMP3ProducesAnMP3(t *testing.T) {
 }
 ```
 
-`write16bitWAV` already exists in `internal/audio/slice_test.go` from the slice work (a hand-built 44-byte header with bits=16); reuse it. If its name differs, use the existing helper's name.
+`write16BitWAV(t, path, frames, channels, sampleRate)` already exists in `internal/audio/slice_test.go`; reuse it.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -382,7 +382,7 @@ func TestRenderRejectsOverTheCap(t *testing.T) {
 
 func TestRenderRejectsANonThirtyTwoBitTake(t *testing.T) {
 	r, dir := newTestAPI(t)
-	write16bitWAV(t, filepath.Join(dir, "jam_16.wav"), 1000)
+	writeHeaderOnly16BitWAV(t, filepath.Join(dir, "jam_16.wav"), 1000)
 	w := do(t, r, http.MethodGet, "/api/render?file=jam_16.wav&from=0&to=100")
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d", w.Code)
@@ -451,7 +451,7 @@ func writeHeaderOnlyWAV(t *testing.T, path string, frames int64) {
 }
 ```
 
-`write16bitWAV` exists in `api_test.go` from the slice bit-depth test; if it lives in the audio package's tests instead, add an equivalent here. Add `"bytes"`, `"encoding/binary"`, `"os/exec"` to the test imports as needed.
+The API package has no 16-bit helper (`TestSliceRejectsANonThirtyTwoBitTake` builds its header inline around `api_test.go:1241`). Add a sibling of `writeHeaderOnlyWAV` that writes bits=16 (block align `channels*2`, byte rate `sampleRate*channels*2`, `dataBytes = frames*2*2`), named `writeHeaderOnly16BitWAV(t, path, frames)`, and optionally refactor the inline slice test to use it. Add `"bytes"`, `"encoding/binary"`, `"os/exec"` to the test imports as needed.
 
 - [ ] **Step 2: Run to verify failure**
 
