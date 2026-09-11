@@ -1079,3 +1079,76 @@ func TestPeaksRangeOnAMissingTakeIs404(t *testing.T) {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
+
+func postJSON(t *testing.T, r *mux.Router, url, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestCutWritesANewTakeAndReturnsItsName(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_src.wav", 48000)
+
+	w := postJSON(t, r, "/api/cut?file=jam_src.wav", `{"start_frame":1000,"end_frame":9000,"label":" hit "}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	var body struct{ Name string }
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.HasPrefix(body.Name, "jam_") || !strings.HasSuffix(body.Name, ".wav") || body.Name == "jam_src.wav" {
+		t.Fatalf("name = %q", body.Name)
+	}
+	info, err := audio.ReadWAVInfo(filepath.Join(dir, body.Name))
+	if err != nil || info.Frames() != 8000 {
+		t.Errorf("frames = %d err = %v, want 8000", info.Frames(), err)
+	}
+	if m := audio.ReadMeta(filepath.Join(dir, body.Name)); m.Label != "hit" {
+		t.Errorf("label = %q, want sanitized %q", m.Label, "hit")
+	}
+	// It shows up in the list.
+	lw := do(t, r, http.MethodGet, "/api/jams")
+	if !strings.Contains(lw.Body.String(), body.Name) {
+		t.Error("cut is not listed")
+	}
+}
+
+func TestCutValidation(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_src.wav", 48000)
+	cases := map[string]struct {
+		url, body string
+		want      int
+	}{
+		"missing take": {"/api/cut?file=jam_nope.wav", `{"start_frame":0,"end_frame":1000}`, http.StatusNotFound},
+		"bad json":     {"/api/cut?file=jam_src.wav", `{`, http.StatusBadRequest},
+		"inverted":     {"/api/cut?file=jam_src.wav", `{"start_frame":500,"end_frame":100}`, http.StatusBadRequest},
+		"past end":     {"/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":48001}`, http.StatusBadRequest},
+		"too short":    {"/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":288}`, http.StatusBadRequest},
+		"no file":      {"/api/cut", `{"start_frame":0,"end_frame":1000}`, http.StatusBadRequest},
+		"traversal":    {"/api/cut?file=../jam_src.wav", `{"start_frame":0,"end_frame":1000}`, http.StatusBadRequest},
+	}
+	for name, c := range cases {
+		if w := postJSON(t, r, c.url, c.body); w.Code != c.want {
+			t.Errorf("%s: status = %d, want %d (%s)", name, w.Code, c.want, w.Body.String())
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("rejected cuts left files: %d entries", len(entries))
+	}
+}
+
+func TestCutRefusesWhenDiskIsLow(t *testing.T) {
+	dir := t.TempDir()
+	a := New(&config.Config{OutputDir: dir, MinFreeGB: 1e9}, nil, nil, nil, nil)
+	r := mux.NewRouter()
+	a.SetupRoutes(r)
+	writeRealTake(t, dir, "jam_src.wav", 48000)
+	if w := postJSON(t, r, "/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":1000}`); w.Code != http.StatusInsufficientStorage {
+		t.Errorf("status = %d, want 507", w.Code)
+	}
+}

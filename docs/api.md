@@ -21,6 +21,7 @@ internet.
 | `GET /api/peaks?file=` | Precomputed waveform, so phones do not download audio to draw one |
 | `GET /api/download?file=[&dl=1]` | Stream inline, or force a download |
 | `DELETE /api/delete?file=` | Remove a take and its sidecars |
+| `POST /api/cut?file=` | Export a region of a take as a new take, with 3ms declick fades |
 
 `GET` routes also accept `HEAD`, except `/api/live`, which is a WebSocket
 upgrade.
@@ -306,6 +307,31 @@ Inline by default so `<audio>` can stream it. `dl` adds a
 `Content-Disposition: attachment` header instead — **any non-empty value**, so
 `dl=0` and `dl=false` force the download just as `dl=1` does. 400 if `file` is
 missing or rejected, 404 if it is not there.
+
+## `POST /api/cut?file=`
+
+Body:
+
+```json
+{ "start_frame": 480000, "end_frame": 998400, "label": "the drop" }
+```
+
+Writes frames `[start_frame, end_frame)` of the take as a new take
+`jam_<now>.wav` in the same directory, with a linear 3ms fade at each edge
+and the audio between them byte-identical to the source. The new sidecar
+carries the given `label` (sanitized like a take label; default
+`"<source label or stem> cut"`), the source's `bpm`, any flags inside the
+region rebased to it, and a `source` field `{name, start_frame, end_frame}`.
+Star, trim and downbeat are not copied. The source is never modified.
+The preview mp3 is rendered in the background, as after a save.
+
+Response: `200 {"name": "jam_2026-09-10_221441.wav"}`.
+
+| Status | When |
+|---|---|
+| 400 | Bad `file`, malformed body, inverted or out-of-range frames, or a region shorter than two fades (289 frames at 48kHz) |
+| 404 | No such take |
+| 507 | Below `MIN_FREE_GB` |
 
 ## `DELETE /api/delete?file=`
 

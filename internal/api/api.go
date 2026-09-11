@@ -71,6 +71,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/trigger", a.handleTrigger).Methods(http.MethodPost)
 	r.HandleFunc("/api/delete", a.handleDelete).Methods(http.MethodDelete)
 	r.HandleFunc("/api/take", a.handleTakePatch).Methods(http.MethodPatch)
+	r.HandleFunc("/api/cut", a.handleCut).Methods(http.MethodPost)
 	r.HandleFunc("/api/flag", a.handleFlagPost).Methods(http.MethodPost)
 	r.HandleFunc("/api/flag", a.handleFlagDelete).Methods(http.MethodDelete)
 	r.HandleFunc("/api/download", a.handleDownload).Methods(http.MethodGet, http.MethodHead)
@@ -530,6 +531,64 @@ const (
 	minBPM = 20.0
 	maxBPM = 400.0
 )
+
+// handleCut exports a region of a take as a new take. It takes the frames
+// from the body, not from the take's trim, so the page can export without a
+// round trip to save the region first and a script can cut any range.
+//
+// The disk guard is the same one Save applies, for the same reason: a cut
+// of a 15-minute take is a 15-minute take.
+func (a *API) handleCut(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.OutputDir, name)); err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	var body struct {
+		StartFrame int64  `json:"start_frame"`
+		EndFrame   int64  `json:"end_frame"`
+		Label      string `json:"label"`
+	}
+	if err := dec.Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.StartFrame < 0 || body.EndFrame <= body.StartFrame {
+		writeErr(w, http.StatusBadRequest, "need 0 <= start_frame < end_frame")
+		return
+	}
+	if free, _ := audio.FreeGB(a.cfg.OutputDir); free < a.cfg.MinFreeGB {
+		writeErr(w, http.StatusInsufficientStorage,
+			fmt.Sprintf("low disk: %.2f GB free, need %.2f GB", free, a.cfg.MinFreeGB))
+		return
+	}
+
+	out, err := audio.Cut(a.cfg.OutputDir, audio.CutRequest{
+		Source: name, StartFrame: body.StartFrame, EndFrame: body.EndFrame,
+		Label: sanitizeLabel(body.Label),
+	}, time.Now())
+	switch {
+	case errors.Is(err, audio.ErrRange):
+		writeErr(w, http.StatusBadRequest, "region is past the end of the take")
+		return
+	case errors.Is(err, audio.ErrTooShort):
+		writeErr(w, http.StatusBadRequest, "region is too short to cut")
+		return
+	case err != nil:
+		log.Printf("cut %s: %v", name, err)
+		writeErr(w, http.StatusInternalServerError, "could not cut")
+		return
+	}
+	// The preview needs ffmpeg and the channel config; never block the
+	// response on it, and never fail the cut because of it -- same as Save.
+	go audio.MakePreview(a.cfg, filepath.Join(a.cfg.OutputDir, out), len(a.cfg.OutChannels()))
+	writeJSON(w, http.StatusOK, map[string]string{"name": out})
+}
 
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a
 // replace: pointers (and a RawMessage for trim) distinguish "field absent"
