@@ -51,6 +51,7 @@ export class Clock {
   }
 
   async play() {
+    if (this.playing) return;
     if (this.engine === 'slice' && this.slice) {
       this.ensureCtx();
       if (this.ctx.state === 'suspended') await this.ctx.resume();
@@ -78,6 +79,7 @@ export class Clock {
   // current position. A region over the cap loops through the preview by
   // seeking back at its end (see tick).
   async setLoop(region) {
+    if (region && region.end <= region.start) region = null;
     const wasPlaying = this.playing;
     const at = this.position();
     this.loop = region;
@@ -96,20 +98,26 @@ export class Clock {
       buffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
     } catch (e) {
       if (id !== this.pendingFetch) return;
-      this.onError?.('could not load the region for looping; using the preview');
+      this.stopSource();
+      this.slice = null;
+      this.loop = null;
       this.engine = 'preview';
+      this.audio.currentTime = at / this.sr;
+      if (wasPlaying) this.audio.play().catch(() => {});
+      this.onError?.('could not load the region for looping; using the preview');
       return;
     }
     if (id !== this.pendingFetch) return; // a newer region superseded this one
     // Keep the old slice playing until the new one is ready, then switch
     // without a gap of silence.
     const playing = this.playing;
+    const now = this.position();
     this.stopSource();
     this.audio.pause();
     this.slice = { buffer, start: region.start, end: region.end };
     this.engine = 'slice';
     if (playing) {
-      const off = at >= region.start && at < region.end ? at - region.start : 0;
+      const off = now >= region.start && now < region.end ? now - region.start : 0;
       this.startSource(off);
       this.playing = true;
       this.tick();
@@ -154,5 +162,8 @@ export class Clock {
     this.pause();
     this.audio.src = '';
     this.ctx?.close?.();
+    this.ctx = null;
+    this.src = null;
+    this.slice = null;
   }
 }
