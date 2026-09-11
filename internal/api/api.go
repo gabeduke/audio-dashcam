@@ -79,6 +79,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
 	r.HandleFunc("/api/slice", a.handleSlice).Methods(http.MethodGet, http.MethodHead)
+	r.HandleFunc("/api/render", a.handleRender).Methods(http.MethodGet)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -637,6 +638,64 @@ func (a *API) handleSlice(w http.ResponseWriter, r *http.Request) {
 		// Headers are gone; all we can do is log and let the client see a
 		// short body, which decodeAudioData rejects.
 		log.Printf("slice %s: %v", name, err)
+	}
+}
+
+// handleRender streams an MP3 of [from, to) for the share sheet. It is the
+// preview's encoder pointed at a region: same bitrate, same channel pan, and
+// the cut's 3ms fades, so what gets texted is what a cut would sound like.
+// Nothing is written to disk and nothing is cached; a render is a few
+// seconds of the Pi's CPU and that is all it costs.
+func (a *API) handleRender(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	q := r.URL.Query()
+	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, err2 := strconv.ParseInt(q.Get("to"), 10, 64)
+	if err1 != nil || err2 != nil || from < 0 || to <= from {
+		writeErr(w, http.StatusBadRequest, "need integer 0 <= from < to")
+		return
+	}
+	path := filepath.Join(a.cfg.OutputDir, name)
+	info, err := audio.ReadWAVInfo(path)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if info.BitsPerSample != 32 {
+		writeErr(w, http.StatusBadRequest, "only 32-bit takes can be rendered")
+		return
+	}
+	if to > info.Frames() {
+		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
+		return
+	}
+	if to-from < 2*audio.FadeFrames(info.SampleRate)+1 {
+		writeErr(w, http.StatusBadRequest, "region is too short to render")
+		return
+	}
+	if to-from > int64(audio.MaxRenderSeconds*info.SampleRate) {
+		writeErr(w, http.StatusBadRequest, audio.ErrRenderTooLong.Error())
+		return
+	}
+
+	base := audio.ReadMeta(path).Label
+	if base == "" {
+		base = strings.TrimSuffix(name, ".wav")
+	}
+	whole := from == 0 && to == info.Frames()
+	fname := audio.RenderFilename(base, from, to, info.SampleRate, whole)
+
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, fname))
+	w.Header().Set("Cache-Control", "no-store")
+	if err := audio.RenderMP3(r.Context(), w, a.cfg.SaveChannels, path, from, to); err != nil {
+		// Headers are already out. The client sniffs the body and reports a
+		// short or non-MP3 result as a failed render.
+		log.Printf("render %s [%d,%d): %v", name, from, to, err)
 	}
 }
 

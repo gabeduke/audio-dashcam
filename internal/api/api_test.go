@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1238,32 +1240,147 @@ func TestSliceAnswersHEADWithHeadersAndNoBody(t *testing.T) {
 
 func TestSliceRejectsANonThirtyTwoBitTake(t *testing.T) {
 	r, dir := newTestAPI(t)
-	le := binary.LittleEndian
-	frames, channels, sampleRate := 100, 2, 48000
-	dataBytes := uint32(frames * channels * 2)
-	var hdr [44]byte
-	copy(hdr[0:4], "RIFF")
-	le.PutUint32(hdr[4:8], dataBytes+36)
-	copy(hdr[8:12], "WAVE")
-	copy(hdr[12:16], "fmt ")
-	le.PutUint32(hdr[16:20], 16)
-	le.PutUint16(hdr[20:22], 1)
-	le.PutUint16(hdr[22:24], uint16(channels))
-	le.PutUint32(hdr[24:28], uint32(sampleRate))
-	le.PutUint32(hdr[28:32], uint32(sampleRate*channels*2))
-	le.PutUint16(hdr[32:34], uint16(channels*2))
-	le.PutUint16(hdr[34:36], 16)
-	copy(hdr[36:40], "data")
-	le.PutUint32(hdr[40:44], dataBytes)
-	buf := append(hdr[:], make([]byte, dataBytes)...)
-	if err := os.WriteFile(filepath.Join(dir, "jam_16.wav"), buf, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeHeaderOnly16BitWAV(t, filepath.Join(dir, "jam_16.wav"), 100)
 	w := do(t, r, http.MethodGet, "/api/slice?file=jam_16.wav&from=0&to=10")
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 	if ct := w.Header().Get("Content-Type"); ct == "audio/wav" {
 		t.Errorf("Content-Type = %q, want no audio/wav on a rejected slice", ct)
+	}
+}
+
+// writeHeaderOnlyWAV writes a canonical 44-byte 32-bit stereo header that
+// claims `frames` frames with no data behind it. Good for tests that stop at
+// the header (cap checks) and never read samples.
+func writeHeaderOnlyWAV(t *testing.T, path string, frames int64) {
+	t.Helper()
+	dataBytes := uint32(frames * 2 * 4)
+	b := make([]byte, 44)
+	le := binary.LittleEndian
+	copy(b[0:4], "RIFF")
+	le.PutUint32(b[4:8], dataBytes+36)
+	copy(b[8:12], "WAVE")
+	copy(b[12:16], "fmt ")
+	le.PutUint32(b[16:20], 16)
+	le.PutUint16(b[20:22], 1)
+	le.PutUint16(b[22:24], 2)
+	le.PutUint32(b[24:28], 48000)
+	le.PutUint32(b[28:32], 48000*2*4)
+	le.PutUint16(b[32:34], 8)
+	le.PutUint16(b[34:36], 32)
+	copy(b[36:40], "data")
+	le.PutUint32(b[40:44], dataBytes)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeHeaderOnly16BitWAV is writeHeaderOnlyWAV's 16-bit sibling, for tests
+// that need a header-only take rejected on bit depth.
+func writeHeaderOnly16BitWAV(t *testing.T, path string, frames int64) {
+	t.Helper()
+	const channels, sampleRate = 2, 48000
+	dataBytes := uint32(frames * channels * 2)
+	b := make([]byte, 44)
+	le := binary.LittleEndian
+	copy(b[0:4], "RIFF")
+	le.PutUint32(b[4:8], dataBytes+36)
+	copy(b[8:12], "WAVE")
+	copy(b[12:16], "fmt ")
+	le.PutUint32(b[16:20], 16)
+	le.PutUint16(b[20:22], 1)
+	le.PutUint16(b[22:24], channels)
+	le.PutUint32(b[24:28], sampleRate)
+	le.PutUint32(b[28:32], sampleRate*channels*2)
+	le.PutUint16(b[32:34], channels*2)
+	le.PutUint16(b[34:36], 16)
+	copy(b[36:40], "data")
+	le.PutUint32(b[40:44], dataBytes)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRenderValidation(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_r.wav", 48000)
+	cases := map[string]struct {
+		url  string
+		want int
+	}{
+		"missing take": {"/api/render?file=jam_nope.wav&from=0&to=100", http.StatusNotFound},
+		"no file":      {"/api/render?from=0&to=100", http.StatusBadRequest},
+		"traversal":    {"/api/render?file=../jam_r.wav&from=0&to=100", http.StatusBadRequest},
+		"non-integer":  {"/api/render?file=jam_r.wav&from=a&to=100", http.StatusBadRequest},
+		"inverted":     {"/api/render?file=jam_r.wav&from=100&to=50", http.StatusBadRequest},
+		"past end":     {"/api/render?file=jam_r.wav&from=0&to=48001", http.StatusBadRequest},
+		"partial":      {"/api/render?file=jam_r.wav&from=0", http.StatusBadRequest},
+		"too short":    {"/api/render?file=jam_r.wav&from=0&to=288", http.StatusBadRequest},
+	}
+	for name, c := range cases {
+		if w := do(t, r, http.MethodGet, c.url); w.Code != c.want {
+			t.Errorf("%s: status = %d, want %d (%s)", name, w.Code, c.want, w.Body.String())
+		}
+	}
+}
+
+func TestRenderRejectsOverTheCap(t *testing.T) {
+	r, dir := newTestAPI(t)
+	// 601 seconds of silence: 115MB on disk is too much for a unit test, so
+	// write a WAV header claiming 601s and no data -- RenderMP3 checks the
+	// cap before ffmpeg ever runs, and ReadWAVInfo only reads the header.
+	writeHeaderOnlyWAV(t, filepath.Join(dir, "jam_long.wav"), 48000*601)
+	w := do(t, r, http.MethodGet, "/api/render?file=jam_long.wav&from=0&to="+strconv.Itoa(48000*601))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "10 minutes") {
+		t.Errorf("status = %d body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRenderRejectsANonThirtyTwoBitTake(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeHeaderOnly16BitWAV(t, filepath.Join(dir, "jam_16.wav"), 1000)
+	w := do(t, r, http.MethodGet, "/api/render?file=jam_16.wav&from=0&to=100")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); strings.HasPrefix(ct, "audio/") {
+		t.Errorf("audio Content-Type on a rejected render: %q", ct)
+	}
+}
+
+func TestRenderStreamsAnMP3WithAName(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not on PATH")
+	}
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_r.wav", 48000*2)
+	if err := audio.WriteMeta(filepath.Join(dir, "jam_r.wav"), audio.Meta{Version: audio.MetaVersion, Label: "the good one"}); err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, r, http.MethodGet, "/api/render?file=jam_r.wav&from=48000&to=72000")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "audio/mpeg" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cd := w.Header().Get("Content-Disposition"); cd != `inline; filename="the good one 0.01-0.01.mp3"` {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	if w.Header().Get("Content-Length") != "" {
+		t.Error("Content-Length must be absent on a stream")
+	}
+	b := w.Body.Bytes()
+	if len(b) < 1024 || !(bytes.HasPrefix(b, []byte("ID3")) || (b[0] == 0xFF && b[1]&0xE0 == 0xE0)) {
+		t.Errorf("body is not an MP3 (%d bytes)", len(b))
+	}
+	// The whole take gets the bare name.
+	w = do(t, r, http.MethodGet, "/api/render?file=jam_r.wav&from=0&to=96000")
+	if cd := w.Header().Get("Content-Disposition"); cd != `inline; filename="the good one.mp3"` {
+		t.Errorf("whole-take Content-Disposition = %q", cd)
 	}
 }
