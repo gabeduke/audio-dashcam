@@ -36,6 +36,16 @@ Rejected: a Select/Navigate mode toggle (a mode is the thing that makes
 people think); long-press to select (invisible, and fights the iOS text
 callout).
 
+**Amended 2026-09-11 after phone testing.** Drag-select on the phone was a
+hair trigger: every scrub and every thumb-wobble left a region behind. The
+owner asked for touch-and-hold instead, and that is now the model. A press
+that holds still for 350ms turns into a region drag, announcing itself with a
+band under the finger — which answers the "invisible" objection above — and
+the iOS callout is suppressed in CSS (`-webkit-touch-callout`/`user-select` on
+`.wave-canvas`), which answers the other. A plain one-finger drag goes back to
+**panning**, the gesture a waveform invites; tap still seeks, double-tap still
+flags, and the overview strip stays for coarse navigation.
+
 ## Facts this design rests on
 
 Read out of the code on 2026-09-11.

@@ -4,8 +4,13 @@
 // sidecar API. The view and the clock own no take state of their own.
 import { TileCache } from './tiles.js';
 import { WaveView } from './view.js';
+import { Overview } from './overview.js';
 import { Clock } from './clock.js';
+import { fmtRegionText, looksLikeMP3, canShareFiles, shareOrDownload } from './share.js';
 import { barBeat, fmtTime, framesPerBeat, clampRegion } from './geometry.js';
+
+// Mirrors audio.MaxRenderSeconds: the server's cap on a share render.
+const MAX_SHARE_SECONDS = 600;
 
 const $ = (id) => document.getElementById(id);
 const file = new URLSearchParams(location.search).get('file');
@@ -22,6 +27,14 @@ function fail(msg) {
   $('wave-error').textContent = msg;
   $('wave-error').hidden = false;
   $('wave-canvas').hidden = true;
+  $('overview-canvas').hidden = true;
+}
+
+// Mirrors the server's render filename sanitiser (internal/audio/render.go).
+// The server names every successful render through Content-Disposition; this
+// only has to cover a response that somehow arrives without one.
+function safeStem(base) {
+  return base.replace(/[^\p{L}\p{N} \-_.]/gu, '').trim() || 'take';
 }
 
 async function main() {
@@ -62,7 +75,22 @@ async function main() {
     // in the top bar is always there, so the error block is the whole UI.
     onGone: () => fail('That take is gone.'),
   });
+  // Declared before the view because WaveView's constructor resizes, which
+  // fits, which emits 'viewChange' -- synchronously, before this line has
+  // finished. `let overview = null` makes that early redraw a no-op; a `const`
+  // assigned afterwards would throw on the temporal dead zone instead.
+  let overview = null;
+  function redraw() { view.draw(); if (overview) overview.draw(); }
   const view = new WaveView({ canvas, tiles, totalFrames: total, sampleRate: sr, getState: () => state, emit });
+  overview = new Overview({
+    canvas: $('overview-canvas'), filePeaks, totalFrames: total,
+    getState: () => state, getView: () => view.view,
+    emit: (ev, p) => {
+      if (ev === 'panTo') view.panTo(p.start);
+      else if (ev === 'centerOn') view.centerOn(p.frame);
+      else if (ev === 'fitAll') view.fitAll();
+    },
+  });
   // A take whose preview has not landed yet has no URL to play: say so once
   // rather than fetching '/api/download?file=undefined' on the first tap.
   const previewUrl = take.preview_name
@@ -71,7 +99,7 @@ async function main() {
   const clock = new Clock({
     previewUrl,
     sampleRate: sr, file,
-    onTick: (frame) => { state.cursor = frame; updateReadout(); view.draw(); },
+    onTick: (frame) => { state.cursor = frame; updateReadout(); redraw(); },
     onError: (m) => toast(m, 'bad'),
     onEnded: () => { $('play').textContent = 'Play'; },
   });
@@ -119,43 +147,63 @@ async function main() {
       if (b.cue_error) toast(b.cue_error, 'bad');
     }).catch((e) => toast(`Could not save flags: ${e.message}`, 'bad'));
   }
-  // setLoop decodes a slice over the network. It can reject, and -- worse for
-  // the button -- when the slice cannot be fetched it *resolves* after
-  // quietly clearing its own loop and falling back to the preview. So the
-  // only honest answer to "is a loop armed?" is clock.loop, read after the
-  // await; the button follows that, never the request we made.
-  function syncLoopButton() {
-    loopOn = !!clock.loop;
-    $('loop').setAttribute('aria-pressed', String(loopOn));
-  }
+  // The loop is implicit now: a region is a loop. setLoop decodes a slice over
+  // the network, and when the slice cannot be fetched it *resolves* after
+  // quietly clearing its own loop and falling back to the preview -- it says so
+  // through onError, so there is nothing left here to report or to toggle.
+  let loopTimer = 0;
   async function applyLoop(region) {
+    // A direct call is the authority on what should be armed, so it cancels a
+    // debounced one still in flight rather than letting it land afterwards.
+    clearTimeout(loopTimer);
+    // Re-arming what is already armed costs a fetch and a decode and, worse,
+    // restarts the phrase under whoever is playing along to it.
+    if (region && clock.loop && clock.loop.start === region.start && clock.loop.end === region.end) return;
+    if (!region && !clock.loop) return;
     try {
       await clock.setLoop(region);
     } catch (e) {
       toast(`Could not loop: ${e.message}`, 'bad');
     }
-    syncLoopButton();
+  }
+  // Dragging an edge and holding a nudge both emit a *final* region many times
+  // over; only the one the hand settles on is worth a slice. Reads state.region
+  // when it fires, not the region it was handed, so the last edit wins.
+  function scheduleLoop() {
+    clearTimeout(loopTimer);
+    loopTimer = setTimeout(() => applyLoop(state.region), 300);
   }
 
   // --- view events --------------------------------------------------------
   function emit(ev, p) {
     switch (ev) {
-      case 'seek': clock.seek(p.frame); state.cursor = p.frame; updateReadout(); view.draw(); break;
+      case 'seek':
+        clock.seek(p.frame);
+        // A region always loops. Seeking out of the slice makes the clock drop
+        // its loop (clock.js seek()), which would leave the band, the text, the
+        // x and the nudges all claiming a region that no longer plays as one.
+        // The cursor stays where it was tapped; Play picks the loop back up.
+        if (state.region && !clock.loop) applyLoop(state.region);
+        state.cursor = p.frame; updateReadout(); redraw(); break;
       case 'addFlag':
         if (state.flags.some((f) => f.frame === p.frame)) break;
         state.flags.push({ frame: p.frame, label: '' });
         state.flags.sort((a, b) => a.frame - b.frame);
-        saveFlags(); view.draw(); break;
+        saveFlags(); redraw(); break;
       case 'selectFlag': openSheet(p.flag); break;
       case 'regionChange':
-        state.region = p.region; updateRegionRow(); view.draw();
-        if (p.final) { saveRegion(); if (loopOn) applyLoop(state.region); }
+        state.region = p.region; updateActionRow(); redraw();
+        if (p.final) { saveRegion(); scheduleLoop(); }
         break;
       case 'downbeatChange':
-        state.grid.downbeat = p.frame; view.draw();
+        // The readout is bars and beats *counted from the downbeat*, so moving
+        // the downbeat changes it even though the cursor has not moved.
+        state.grid.downbeat = p.frame; updateReadout(); view.draw();
         if (p.final) saveDownbeat();
         break;
-      case 'viewChange': break;
+      // The first viewChange arrives from inside `new WaveView`, before the
+      // overview exists; the guard is what makes that first one harmless.
+      case 'viewChange': if (overview) overview.draw(); break;
     }
   }
 
@@ -190,11 +238,10 @@ async function main() {
     state.flags = state.flags.filter((x) => x.frame !== f.frame);
     state.selectedFlag = null;
     sheet.hidden = true;
-    saveFlags(); view.draw();
+    saveFlags(); redraw();
   });
 
   // --- transport ----------------------------------------------------------
-  let loopOn = false;
   $('play').addEventListener('click', async () => {
     if (clock.playing) clock.pause();
     else await clock.play();
@@ -202,30 +249,18 @@ async function main() {
     // so the label follows the clock rather than what we asked it to do.
     $('play').textContent = clock.playing ? 'Pause' : 'Play';
   });
-  $('loop').addEventListener('click', async () => {
-    if (!state.region) { toast('Set a region first'); return; }
-    const next = !loopOn;
-    // aria-pressed flips only after the loop is really armed (applyLoop reads
-    // clock.loop), so a slice that failed to load leaves the button off.
-    await applyLoop(next ? state.region : null);
-    if (loopOn && !clock.playing) { await clock.play(); $('play').textContent = clock.playing ? 'Pause' : 'Play'; }
-  });
-
-  // --- region row ---------------------------------------------------------
+  // --- region -------------------------------------------------------------
   const nudgeFrames = () => (state.grid.bpm ? Math.round(framesPerBeat(state.grid)) : Math.round(sr * 0.01));
   function setRegion(r, final = true) { emit('regionChange', { region: clampRegion(r, total, minLen), final }); }
   function clearRegion() {
     state.region = null;
-    updateRegionRow();
+    updateActionRow();
     saveRegion();
-    if (loopOn) applyLoop(null);   // applyLoop turns the button off with the loop
-    view.draw();
+    applyLoop(null);
+    redraw();
   }
-  $('region').addEventListener('click', () => {
-    if (state.region) { clearRegion(); return; }
-    const half = state.grid.bpm ? Math.round(framesPerBeat(state.grid) * 2) : Math.round(view.view.width * view.view.fpp / 2);
-    setRegion({ start: state.cursor - half, end: state.cursor + half });
-  });
+  $('region-clear').addEventListener('click', clearRegion);
+  $('region-delete').addEventListener('click', clearRegion);
   const nudge = (edge, sign) => () => {
     if (!state.region) return;
     const r = { ...state.region };
@@ -255,14 +290,27 @@ async function main() {
       });
     }
   }
-  function updateRegionRow() {
+  function updateActionRow() {
     const r = state.region;
-    $('region').textContent = r ? 'Clear' : 'Region';
+    $('region-text').textContent = fmtRegionText(r, sr);
+    $('region-clear').hidden = !r;
     $('export').disabled = !r;
-    $('region-start').textContent = r ? fmtTime(r.start, sr) : '—';
-    $('region-end').textContent = r ? fmtTime(r.end, sr) : '—';
+    $('region-delete').disabled = !r;
     for (const id of ['start-dec', 'start-inc', 'end-dec', 'end-inc']) $(id).disabled = !r;
   }
+
+  $('downbeat-reset').addEventListener('click', () => {
+    state.grid.downbeat = 0;
+    patch({ downbeat_frame: null }).catch((e) => toast(`Could not reset downbeat: ${e.message}`, 'bad'));
+    updateReadout();
+    redraw();
+  });
+
+  // The disclosure remembers itself: someone who works with the nudges wants
+  // them open on the next take too.
+  const fine = $('fine');
+  try { fine.open = localStorage.getItem('wave.fine') === '1'; } catch {}
+  fine.addEventListener('toggle', () => { try { localStorage.setItem('wave.fine', fine.open ? '1' : '0'); } catch {} });
 
   // --- export -------------------------------------------------------------
   $('export').addEventListener('click', async () => {
@@ -294,17 +342,59 @@ async function main() {
     }
   });
 
-  // --- zoom buttons & keyboard -------------------------------------------
-  $('zoom-in').addEventListener('click', () => view.zoomTo(view.view.fpp / 2, view.view.width / 2));
-  $('zoom-out').addEventListener('click', () => view.zoomTo(view.view.fpp * 2, view.view.width / 2));
-  $('zoom-fit').addEventListener('click', () => view.fitAll());
+  // --- share --------------------------------------------------------------
+  // The region (or the whole take) rendered to an MP3 and handed to the phone's
+  // share sheet. Nothing is saved here: a share is a stream, not a cut.
+  const shareBtn = $('share');
+  // Decided once, up front: a browser that cannot hand a file to a share sheet
+  // says "Download" from the start rather than surprising the user on tap.
+  const shareLabel = canShareFiles() ? 'Share' : 'Download';
+  shareBtn.textContent = shareLabel;
+  shareBtn.addEventListener('click', async () => {
+    // The server caps a render at MaxRenderSeconds and would reject this after
+    // a round trip; saying so before the fetch turns a wait-then-fail into an
+    // instruction, and the button never leaves its label behind.
+    if (!state.region && total > MAX_SHARE_SECONDS * sr) {
+      toast(`Pick a region first — the whole take is over ${MAX_SHARE_SECONDS / 60} minutes`, 'bad');
+      return;
+    }
+    const from = state.region ? state.region.start : 0;
+    const to = state.region ? state.region.end : total;
+    shareBtn.disabled = true;
+    shareBtn.textContent = 'Rendering…';
+    try {
+      const res = await fetch(`/api/render?file=${encodeURIComponent(file)}&from=${from}&to=${to}`);
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error || `status ${res.status}`);
+      }
+      // The server names the file; this only has to survive a missing header.
+      const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+      const filename = m ? m[1] : `${safeStem(take.label || file.replace(/\.wav$/, ''))}.mp3`;
+      const blob = await res.blob();
+      // A render that died mid-stream is still a 200 -- the headers left before
+      // ffmpeg did. Sniff the body rather than trust the status.
+      const head = new Uint8Array(await blob.slice(0, 2048).arrayBuffer());
+      if (!looksLikeMP3(head) || blob.size <= 1024) throw new Error('render failed, try again');
+      const result = await shareOrDownload(blob, filename, filename.replace(/\.mp3$/, ''));
+      // Only worth saying when the button promised a share sheet and the sheet
+      // was not what happened; a plain Download button is its own message.
+      if (result === 'downloaded' && shareLabel === 'Share') toast('Shared as a download');
+    } catch (e) {
+      toast(`${shareLabel} failed: ${e.message}`, 'bad');
+    } finally {
+      shareBtn.disabled = false;
+      shareBtn.textContent = shareLabel;
+    }
+  });
+
+  // --- keyboard -----------------------------------------------------------
   document.addEventListener('keydown', (e) => {
     // Typing a flag's name must never be read as transport shortcuts.
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
     switch (e.key) {
       case ' ': e.preventDefault(); $('play').click(); break;
-      case 'l': case 'L': $('loop').click(); break;
       case 'f': case 'F': emit('addFlag', { frame: state.cursor }); break;
       // '[' sets the region start at the cursor, ']' the end; either one on
       // its own creates a region, so the pair works in either order.
@@ -320,8 +410,9 @@ async function main() {
           end: state.cursor,
         });
         break;
-      case '+': case '=': $('zoom-in').click(); break;
-      case '-': $('zoom-out').click(); break;
+      case '+': case '=': view.zoomTo(view.view.fpp / 2, view.view.width / 2); break;
+      case '-': view.zoomTo(view.view.fpp * 2, view.view.width / 2); break;
+      case '0': view.fitAll(); break;
       case 'ArrowLeft': view.panTo(view.view.start - view.view.width * view.view.fpp * 0.2); break;
       case 'ArrowRight': view.panTo(view.view.start + view.view.width * view.view.fpp * 0.2); break;
     }
@@ -333,14 +424,19 @@ async function main() {
     $('pos-time').textContent = fmtTime(state.cursor, sr);
   }
 
-  updateRegionRow();
+  updateActionRow();
   updateReadout();
   view.fitAll();
+  // A region is a loop, so a take reopened with one saved comes back looping
+  // without anyone having to arm it again.
+  if (state.region) applyLoop(state.region);
   // Two hooks, because neither alone covers a phone: pagehide is the one that
   // fires on navigation, and visibilitychange is the only one that reliably
   // fires when the app is switched away from or the screen locks.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushRegion(); });
-  window.addEventListener('pagehide', () => { flushRegion(); clock.destroy(); tiles.stop(); view.destroy(); });
+  // flushRegion is the only thing that has to outlive the page; a pending loop
+  // does not -- cancel it so it cannot arm a clock that has just been destroyed.
+  window.addEventListener('pagehide', () => { clearTimeout(loopTimer); flushRegion(); clock.destroy(); tiles.stop(); view.destroy(); overview.destroy(); });
 }
 
 main().catch((e) => fail(e.message || String(e)));

@@ -25,34 +25,42 @@
 
 <main class="wave-main">
   <div id="wave-error" class="wave-error" hidden></div>
+  <canvas id="overview-canvas" class="overview-canvas" aria-label="Whole take"></canvas>
   <canvas id="wave-canvas" class="wave-canvas" aria-label="Waveform"></canvas>
 
-  <div class="wave-row transport">
+  <div class="wave-row action">
     <button id="play" class="icon-btn" type="button">Play</button>
-    <button id="loop" class="icon-btn" type="button" aria-pressed="false">Loop region</button>
-    <span class="readout"><span id="pos-bar" class="mono"></span> <span id="pos-time" class="mono"></span></span>
+    <span class="region-text">
+      <span id="region-text" class="mono">whole take</span>
+      <button id="region-clear" class="region-x" type="button" aria-label="Clear region" hidden>×</button>
+    </span>
+    <button id="share" class="icon-btn primary" type="button">Share</button>
   </div>
 
-  <div class="wave-row region">
-    <button id="region" class="icon-btn" type="button">Region</button>
-    <span class="edge">
-      <button id="start-dec" class="nudge" type="button" aria-label="Region start earlier">−</button>
-      <span id="region-start" class="mono">—</span>
-      <button id="start-inc" class="nudge" type="button" aria-label="Region start later">+</button>
-    </span>
-    <span class="edge">
-      <button id="end-dec" class="nudge" type="button" aria-label="Region end earlier">−</button>
-      <span id="region-end" class="mono">—</span>
-      <button id="end-inc" class="nudge" type="button" aria-label="Region end later">+</button>
-    </span>
-    <button id="export" class="icon-btn primary" type="button" disabled>Export</button>
-  </div>
-
-  <div class="wave-row zoom">
-    <button id="zoom-out" class="nudge" type="button" aria-label="Zoom out">−</button>
-    <button id="zoom-fit" class="nudge" type="button">Fit</button>
-    <button id="zoom-in" class="nudge" type="button" aria-label="Zoom in">+</button>
-  </div>
+  <details id="fine" class="fine">
+    <summary>Fine tune</summary>
+    <div class="fine-grid">
+      <span class="fine-label">Start</span>
+      <span class="edge">
+        <button id="start-dec" class="nudge" type="button" aria-label="Region start earlier">−</button>
+        <button id="start-inc" class="nudge" type="button" aria-label="Region start later">+</button>
+      </span>
+      <span class="fine-label">End</span>
+      <span class="edge">
+        <button id="end-dec" class="nudge" type="button" aria-label="Region end earlier">−</button>
+        <button id="end-inc" class="nudge" type="button" aria-label="Region end later">+</button>
+      </span>
+      <span class="fine-label">Position</span>
+      <span class="readout"><span id="pos-bar" class="mono"></span> <span id="pos-time" class="mono"></span></span>
+      <span class="fine-label">Downbeat</span>
+      <span class="fine-hint">drag the marker on the waveform · <button id="downbeat-reset" class="linkish" type="button">reset</button></span>
+      <span class="fine-label"></span>
+      <span class="edge">
+        <button id="export" class="icon-btn" type="button" disabled>Export as take</button>
+        <button id="region-delete" class="icon-btn danger" type="button" disabled>Delete region</button>
+      </span>
+    </div>
+  </details>
 </main>
 
 <div id="flag-sheet" class="sheet" hidden>

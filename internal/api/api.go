@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,6 +81,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
 	r.HandleFunc("/api/slice", a.handleSlice).Methods(http.MethodGet, http.MethodHead)
+	r.HandleFunc("/api/render", a.handleRender).Methods(http.MethodGet)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -638,6 +641,106 @@ func (a *API) handleSlice(w http.ResponseWriter, r *http.Request) {
 		// short body, which decodeAudioData rejects.
 		log.Printf("slice %s: %v", name, err)
 	}
+}
+
+// handleRender streams an MP3 of [from, to) for the share sheet. It is the
+// preview's encoder pointed at a region: same bitrate, same channel pan, and
+// the cut's 3ms fades, so what gets texted is what a cut would sound like.
+// Nothing is written to disk and nothing is cached; a render is a few
+// seconds of the Pi's CPU and that is all it costs.
+func (a *API) handleRender(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	q := r.URL.Query()
+	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, err2 := strconv.ParseInt(q.Get("to"), 10, 64)
+	if err1 != nil || err2 != nil || from < 0 || to <= from {
+		writeErr(w, http.StatusBadRequest, "need integer 0 <= from < to")
+		return
+	}
+	path := filepath.Join(a.cfg.OutputDir, name)
+	info, err := audio.ReadWAVInfo(path)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if info.BitsPerSample != 32 {
+		writeErr(w, http.StatusBadRequest, "only 32-bit takes can be rendered")
+		return
+	}
+	if to > info.Frames() {
+		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
+		return
+	}
+	if to-from < 2*audio.FadeFrames(info.SampleRate)+1 {
+		writeErr(w, http.StatusBadRequest, "region is too short to render")
+		return
+	}
+	if to-from > int64(audio.MaxRenderSeconds*info.SampleRate) {
+		writeErr(w, http.StatusBadRequest, audio.ErrRenderTooLong.Error())
+		return
+	}
+
+	base := audio.ReadMeta(path).Label
+	if base == "" {
+		base = strings.TrimSuffix(name, ".wav")
+	}
+	whole := from == 0 && to == info.Frames()
+	fname := audio.RenderFilename(base, from, to, info.SampleRate, whole)
+
+	// RFC 6266: filename= is the ASCII fallback for byte-oriented parsers,
+	// filename*= carries the real, possibly non-ASCII name. Sending both means
+	// a label like "caf\u00e9" survives into the share sheet on clients that
+	// read the extended form, and degrades to "caf" on those that do not.
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(
+		`inline; filename="%s"; filename*=UTF-8''%s`,
+		audio.RenderFilename(asciiOnly(base), from, to, info.SampleRate, whole),
+		url.PathEscape(fname),
+	))
+	w.Header().Set("Cache-Control", "no-store")
+	// Counting the bytes separates the two failures. ffmpeg dying mid-stream
+	// cannot be reported -- the 200 and the headers are long gone, and the
+	// client sniffs the body for a short or non-MP3 result. Failing before the
+	// first byte (no ffmpeg on PATH, a file that vanished) is still ours to
+	// report, and a 200 with an empty body would be a lie.
+	cw := &countingWriter{w: w}
+	if err := audio.RenderMP3(r.Context(), cw, a.cfg.SaveChannels, path, from, to); err != nil {
+		log.Printf("render %s [%d,%d): %v", name, from, to, err)
+		if cw.n == 0 {
+			// Nothing has been flushed, so writeErr's own Content-Type and
+			// status replace the ones set above.
+			writeErr(w, http.StatusInternalServerError, "render failed")
+		}
+	}
+}
+
+// countingWriter reports whether anything reached the client yet, which is
+// what decides if an error can still be turned into a status code.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// asciiOnly drops every non-ASCII rune, for the Content-Disposition fallback
+// name. An entirely non-ASCII label reduces to "", which RenderFilename then
+// names "take".
+func asciiOnly(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x80 {
+			return r
+		}
+		return -1
+	}, s)
 }
 
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a

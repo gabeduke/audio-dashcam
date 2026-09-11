@@ -28,7 +28,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y portaudio19-dev
+          sudo apt-get install -y portaudio19-dev ffmpeg
 
       - name: gofmt
         run: |

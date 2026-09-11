@@ -63,7 +63,14 @@ export class Clock {
     if (this.engine === 'slice' && this.slice) {
       this.ensureCtx();
       if (this.ctx.state === 'suspended') await this.ctx.resume();
-      this.startSource(Math.max(0, this.position() - this.slice.start));
+      // The cursor can sit outside the slice: a paused tap past the region
+      // leaves position() on the tapped frame while the slice still covers
+      // the old region (setLoop resolves with playing === false and never
+      // re-offsets). Subtracting start would then hand startSource an offset
+      // past the buffer, so fall back to the region's head, mirroring the
+      // same guard setLoop applies when it switches slices while playing.
+      const at = this.position();
+      this.startSource(at >= this.slice.start && at < this.slice.end ? at - this.slice.start : 0);
     } else {
       try { await this.audio.play(); } catch (e) { this.onError?.('could not play the preview'); return; }
     }

@@ -1,6 +1,6 @@
 # HTTP API
 
-Thirteen routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
+Fourteen routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
 else the server answers is the static UI under `web/static`.
 
 There is **no authentication and no rate limiting**. `DELETE /api/delete`
@@ -23,9 +23,10 @@ internet.
 | `DELETE /api/delete?file=` | Remove a take and its sidecars |
 | `POST /api/cut?file=` | Export a region of a take as a new take, with 3ms declick fades |
 | `GET /api/slice?file=&from=&to=` | A region as a 16-bit WAV with the same fades a cut gets, for auditioning |
+| `GET /api/render?file=&from=&to=` | An MP3 of a region, streamed from ffmpeg with the cut's fades, for the share sheet |
 
 `GET` routes also accept `HEAD`, except `/api/live`, which is a WebSocket
-upgrade.
+upgrade, and `/api/render`, which does not.
 
 ---
 
@@ -350,6 +351,21 @@ what a cut will produce. 16-bit because browsers cannot reliably decode
 | Status | When |
 |---|---|
 | 400 | Bad `file`, non-integer or inverted frames, past the end, or over 60s |
+| 404 | No such take |
+
+## `GET /api/render?file=&from=&to=`
+
+Streams frames `[from, to)` as a 128 kbps MP3 straight from ffmpeg — the
+preview encoder pointed at a region, with the same 3ms declick fades a cut
+gets and a sample-exact trim. Nothing is written to disk or cached. Capped
+at 10 minutes. `Content-Disposition` names the file
+`<label or stem> <m.ss>-<m.ss>.mp3`, or `<label or stem>.mp3` for the whole
+take, so the share sheet shows a readable title. No `Content-Length`: the
+stream's size is unknown until it ends.
+
+| Status | When |
+|---|---|
+| 400 | Bad `file`, non-integer or inverted frames, past the end, over 10 minutes, shorter than two fades (289 frames at 48kHz), or a non-32-bit take |
 | 404 | No such take |
 
 ## `DELETE /api/delete?file=`

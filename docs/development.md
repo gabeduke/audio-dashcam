@@ -72,6 +72,28 @@ runner — no package.json, no dependencies:
 
     node --test 'web/static/lib/wave/*.test.js'
 
+### Checking the waveform page by hand
+
+The gestures and the share flow are not covered by the node tests, so after
+touching `view.js`, `overview.js`, `share.js` or `page.js`, check by hand:
+
+- **Overview strip** — drag it to pan the main waveform, tap to jump, double-tap
+  to fit the whole take
+- **Pan** — one-finger drag on the main waveform slides the view under the
+  finger; pinch zooms
+- **Hold-select** — press and hold on the main waveform for ~350ms until a band
+  appears under the finger, then drag to draw a region
+- **Implicit loop** — playback loops the region with no Loop toggle to find;
+  clearing the region returns to plain playback from the cursor
+- **Fine tune** — the disclosure's Start/End nudges, the readout, downbeat
+  reset, Export as take and Delete region all move the same region the hold
+  drew
+- **Share on a phone** — over `tailscale serve` (HTTPS), the button opens the
+  share sheet with the rendered MP3; over plain HTTP it falls back to
+  Download
+- **Export as take** — produces a new take with declick fades at the region's
+  edges
+
 The rest of the UI is checked by hand and, when something needs it, by a
 throwaway Playwright script in a scratch directory. Those are not committed;
 there is no runner to add one to.
