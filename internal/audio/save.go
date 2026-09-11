@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gabeduke/hindsight/internal/config"
 	"github.com/shirou/gopsutil/v3/disk"
 )
 
@@ -75,8 +76,11 @@ func (s *Saver) Saving() bool {
 }
 
 // FreeGB reports free space on the output volume.
-func (s *Saver) FreeGB() (float64, float64) {
-	u, err := disk.Usage(s.cap.cfg.OutputDir)
+func (s *Saver) FreeGB() (float64, float64) { return FreeGB(s.cap.cfg.OutputDir) }
+
+// FreeGB reports free gigabytes and used percent for the volume holding dir.
+func FreeGB(dir string) (float64, float64) {
+	u, err := disk.Usage(dir)
 	if err != nil {
 		return 0, 0
 	}
@@ -241,12 +245,13 @@ func stampFlags(wavPath string, flags []Flag) {
 	log.Printf("[*] %s — %d flag(s)", filepath.Base(wavPath), len(flags))
 }
 
-// makePreview renders the mp3 proxy. The channel mapping is explicit: a bare
+func (s *Saver) makePreview(wavPath string, outCh int) { MakePreview(s.cap.cfg, wavPath, outCh) }
+
+// MakePreview renders the mp3 proxy. The channel mapping is explicit: a bare
 // `-ac 2` on an 8-channel file makes ffmpeg assume a 7.1 layout, which folds
 // channel 3 into a mono centre and discards channel 4 as LFE entirely — which
 // is exactly what made previews sound wrong.
-func (s *Saver) makePreview(wavPath string, outCh int) {
-	cfg := s.cap.cfg
+func MakePreview(cfg *config.Config, wavPath string, outCh int) {
 	mp3Path := previewPath(wavPath)
 	tmp := mp3Path + ".tmp"
 
