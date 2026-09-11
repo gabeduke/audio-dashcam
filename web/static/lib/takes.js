@@ -144,6 +144,7 @@ export class TakesList {
       <div class="wave pending">waveform pending…</div>
       <div class="take-actions">
         <button class="icon-btn play" type="button">Play</button>
+        <a class="icon-btn open">Open</a>
         <a class="icon-btn dl" download>WAV</a>
         <button class="icon-btn danger del" type="button">Delete</button>
       </div>`;
@@ -161,6 +162,7 @@ export class TakesList {
       metaEl: el.querySelector('.take-meta'),
       waveEl: el.querySelector('.wave'),
       playBtn: el.querySelector('.play'),
+      openEl: el.querySelector('.open'),
       dlEl: el.querySelector('.dl'),
       delBtn: el.querySelector('.del'),
       ws: null,
@@ -334,6 +336,7 @@ export class TakesList {
     }
     row.metaEl.textContent = `${fmtTime(t.duration_seconds)} · ${fmtSize(t.size_mb)}`;
     row.dlEl.href = `/api/download?file=${encodeURIComponent(t.name)}&dl=1`;
+    row.openEl.href = `/wave.html?file=${encodeURIComponent(t.name)}`;
 
     const ready = t.has_preview;
     row.playBtn.disabled = !ready;

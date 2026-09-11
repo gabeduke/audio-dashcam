@@ -781,3 +781,46 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
 
   .capture-btn { min-height: var(--tap); margin-top: 8px; }
 }
+
+/* ---------- waveform page ---------- */
+.wave-page .topbar { display: flex; align-items: center; gap: 10px; }
+.wave-page .back { font-size: 28px; line-height: 1; padding: 0 10px; color: var(--ink); text-decoration: none; }
+.wave-title { display: flex; flex-direction: column; min-width: 0; }
+.wave-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wave-bpm { font-size: 12px; color: var(--ink-dim); }
+.wave-main { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.wave-canvas {
+  width: 100%; height: 40vh; min-height: 180px;
+  border-radius: var(--radius); background: var(--panel);
+  touch-action: none; display: block;
+}
+.wave-error { padding: 24px; color: var(--danger); }
+.wave-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wave-row .readout { margin-left: auto; color: var(--ink-dim); font-size: 13px; }
+.wave-row .edge { display: inline-flex; align-items: center; gap: 4px; }
+.mono { font-family: var(--mono); }
+.nudge {
+  appearance: none; min-width: var(--tap); min-height: 40px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--panel); color: var(--ink); font-size: 16px; cursor: pointer;
+}
+.nudge:disabled { opacity: 0.4; }
+.icon-btn.primary { background: var(--accent-dk); color: var(--ink); border-color: var(--accent-dk); }
+.icon-btn[aria-pressed="true"] { background: var(--accent); color: #000; }
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  padding: 12px calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+  background: var(--panel-2); border-top: 1px solid var(--line);
+  display: flex; gap: 8px; align-items: center; z-index: 50;
+}
+/* display:flex above outranks the UA's [hidden] rule, so the sheet would sit
+   open on every load without this. */
+.sheet[hidden] { display: none; }
+.sheet input {
+  flex: 1; min-height: 40px; padding: 0 10px;
+  border: 1px solid var(--flag); border-radius: 9px;
+  background: var(--panel); color: var(--ink); font-family: var(--font); font-size: 15px;
+}
+@media (min-width: 900px) {
+  .wave-canvas { height: 60vh; }
+}
