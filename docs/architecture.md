@@ -11,6 +11,7 @@ internal/audio      device, ring, levels, envelope, saving  (cgo, PortAudio)
 internal/midi       rawmidi discovery, clock, tempo estimate
 internal/api        HTTP and WebSocket handlers
 web/static          the UI, served from disk per request
+web/static/lib/wave the waveform page: geometry, tiles, view, clock, page
 ```
 
 ## Data flow
@@ -199,3 +200,13 @@ ETag, so an unchanged list does not re-render and interrupt a playing preview.
 Service-worker registration and the screen wake lock are both guarded on
 `window.isSecureContext`, so they switch themselves on if the Pi is ever given
 an HTTPS name and stay quiet otherwise.
+
+### The waveform page
+
+`web/static/lib/wave/` is five modules: `geometry` (pure pixel/frame math,
+node-tested), `tiles` (fetches and caches `/api/peaks` ranges), `view`
+(canvas rendering and gestures), `clock` (playback position), and `page`
+(wiring). It is backed by three endpoints: `GET /api/peaks?file=&from=&to=&buckets=`
+for on-demand ranges, `POST /api/cut?file=` to export a region as a new take
+with declick fades, and `GET /api/slice?file=&from=&to=` to audition a region
+before cutting it.

@@ -20,6 +20,9 @@ type PeakData struct {
 	SampleRate int     `json:"sample_rate"`
 	Duration   float64 `json:"duration"`
 	Buckets    int     `json:"buckets"`
+	// From is the first frame the buckets describe. Zero for the whole-take
+	// file; set by RangePeaks.
+	From int64 `json:"from"`
 	// Data holds one array per channel of alternating min,max pairs in -1..1.
 	Data [][]float32 `json:"data"`
 }
@@ -63,7 +66,7 @@ func WriteWAV(path string, data []int32, srcChannels int, pick []int, sampleRate
 	w := bufio.NewWriterSize(f, 1<<20)
 
 	dataBytes := uint32(frames * outCh * 4)
-	if err := writeWAVHeader(w, dataBytes, outCh, sampleRate); err != nil {
+	if err := writeWAVHeader(w, dataBytes, outCh, sampleRate, 32); err != nil {
 		return nil, err
 	}
 
@@ -92,21 +95,22 @@ func WriteWAV(path string, data []int32, srcChannels int, pick []int, sampleRate
 	return pk.finish(sampleRate, frames), nil
 }
 
-func writeWAVHeader(w *bufio.Writer, dataBytes uint32, channels, sampleRate int) error {
+func writeWAVHeader(w *bufio.Writer, dataBytes uint32, channels, sampleRate, bitsPerSample int) error {
 	le := binary.LittleEndian
 	var b [wavHeaderBytes]byte
 
+	bytesPerSample := bitsPerSample / 8
 	copy(b[0:4], "RIFF")
 	le.PutUint32(b[4:8], dataBytes+36)
 	copy(b[8:12], "WAVE")
 	copy(b[12:16], "fmt ")
-	le.PutUint32(b[16:20], 16)                            // fmt chunk size
-	le.PutUint16(b[20:22], 1)                             // PCM
-	le.PutUint16(b[22:24], uint16(channels))              //
-	le.PutUint32(b[24:28], uint32(sampleRate))            //
-	le.PutUint32(b[28:32], uint32(sampleRate*channels*4)) // byte rate
-	le.PutUint16(b[32:34], uint16(channels*4))            // block align
-	le.PutUint16(b[34:36], 32)                            // bits per sample
+	le.PutUint32(b[16:20], 16) // fmt chunk size
+	le.PutUint16(b[20:22], 1)  // PCM
+	le.PutUint16(b[22:24], uint16(channels))
+	le.PutUint32(b[24:28], uint32(sampleRate))
+	le.PutUint32(b[28:32], uint32(sampleRate*channels*bytesPerSample)) // byte rate
+	le.PutUint16(b[32:34], uint16(channels*bytesPerSample))            // block align
+	le.PutUint16(b[34:36], uint16(bitsPerSample))                      // bits per sample
 	copy(b[36:40], "data")
 	le.PutUint32(b[40:44], dataBytes)
 
@@ -228,6 +232,9 @@ type WAVInfo struct {
 	SampleRate    int
 	BitsPerSample int
 	DataBytes     int64
+	// DataOffset is the byte offset of the first sample, i.e. just past the
+	// data chunk header. 44 for every take this app writes.
+	DataOffset int64
 }
 
 // Duration reports the take length in seconds.
@@ -237,6 +244,15 @@ func (w WAVInfo) Duration() float64 {
 		return 0
 	}
 	return float64(w.DataBytes) / float64(bytesPerFrame*w.SampleRate)
+}
+
+// Frames reports the number of sample frames in the data chunk.
+func (w WAVInfo) Frames() int64 {
+	bpf := int64(w.Channels * w.BitsPerSample / 8)
+	if bpf <= 0 {
+		return 0
+	}
+	return w.DataBytes / bpf
 }
 
 // ReadWAVInfo parses a WAV header by walking its chunks. Reading the real
@@ -296,6 +312,11 @@ func ReadWAVInfo(path string) (WAVInfo, error) {
 			if !sawFmt {
 				return info, fmt.Errorf("data chunk before fmt chunk")
 			}
+			off, err := f.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return info, err
+			}
+			info.DataOffset = off
 			return info, nil
 		default:
 			if _, err := f.Seek(size+size%2, io.SeekCurrent); err != nil {

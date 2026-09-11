@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hindsight — take</title>
+<meta name="theme-color" content="#0b1120">
+<meta name="color-scheme" content="dark">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body class="wave-page">
+
+<header class="topbar">
+  <a class="back" href="/" aria-label="Back to takes">‹</a>
+  <div class="wave-title">
+    <span id="wave-name" class="wave-name">…</span>
+    <span id="wave-bpm" class="wave-bpm"></span>
+  </div>
+</header>
+
+<main class="wave-main">
+  <div id="wave-error" class="wave-error" hidden></div>
+  <canvas id="wave-canvas" class="wave-canvas" aria-label="Waveform"></canvas>
+
+  <div class="wave-row transport">
+    <button id="play" class="icon-btn" type="button">Play</button>
+    <button id="loop" class="icon-btn" type="button" aria-pressed="false">Loop region</button>
+    <span class="readout"><span id="pos-bar" class="mono"></span> <span id="pos-time" class="mono"></span></span>
+  </div>
+
+  <div class="wave-row region">
+    <button id="region" class="icon-btn" type="button">Region</button>
+    <span class="edge">
+      <button id="start-dec" class="nudge" type="button" aria-label="Region start earlier">−</button>
+      <span id="region-start" class="mono">—</span>
+      <button id="start-inc" class="nudge" type="button" aria-label="Region start later">+</button>
+    </span>
+    <span class="edge">
+      <button id="end-dec" class="nudge" type="button" aria-label="Region end earlier">−</button>
+      <span id="region-end" class="mono">—</span>
+      <button id="end-inc" class="nudge" type="button" aria-label="Region end later">+</button>
+    </span>
+    <button id="export" class="icon-btn primary" type="button" disabled>Export</button>
+  </div>
+
+  <div class="wave-row zoom">
+    <button id="zoom-out" class="nudge" type="button" aria-label="Zoom out">−</button>
+    <button id="zoom-fit" class="nudge" type="button">Fit</button>
+    <button id="zoom-in" class="nudge" type="button" aria-label="Zoom in">+</button>
+  </div>
+</main>
+
+<div id="flag-sheet" class="sheet" hidden>
+  <input id="flag-label" type="text" maxlength="120" placeholder="name this moment">
+  <button id="flag-delete" class="icon-btn danger" type="button">Delete</button>
+  <button id="flag-done" class="icon-btn" type="button">Done</button>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+<script type="module" src="/lib/wave/page.js"></script>
+</body>
+</html>

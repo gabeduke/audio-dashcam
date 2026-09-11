@@ -67,9 +67,14 @@ go test -race ./...
 two shell scripts the release workflow depends on, which otherwise would only
 ever be exercised by a real release.
 
-**There are no JS tests.** The UI is checked by hand and, when something needs
-it, by a throwaway Playwright script in a scratch directory. Those are not
-committed; there is no runner to add one to.
+The waveform page's pure geometry has JavaScript tests under node's built-in
+runner — no package.json, no dependencies:
+
+    node --test 'web/static/lib/wave/*.test.js'
+
+The rest of the UI is checked by hand and, when something needs it, by a
+throwaway Playwright script in a scratch directory. Those are not committed;
+there is no runner to add one to.
 
 ## Deploying to a Pi
 

@@ -2,12 +2,14 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -139,6 +141,38 @@ func TestPatchTakeExplicitNullClearsTrim(t *testing.T) {
 	}
 	if m := audio.ReadMeta(wav); m.Trim != nil {
 		t.Errorf("Trim = %+v, want nil after an explicit null", m.Trim)
+	}
+}
+
+func TestPatchTakeSetsAndClearsDownbeat(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_d.wav", 1000)
+	wav := filepath.Join(dir, "jam_d.wav")
+
+	if w := patch(t, r, "jam_d.wav", `{"downbeat_frame":480}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	} else if !strings.Contains(w.Body.String(), `"downbeat_frame":480`) {
+		t.Errorf("response does not echo downbeat: %s", w.Body.String())
+	}
+	if m := audio.ReadMeta(wav); m.DownbeatFrame == nil || *m.DownbeatFrame != 480 {
+		t.Errorf("sidecar downbeat = %v", m.DownbeatFrame)
+	}
+	if w := patch(t, r, "jam_d.wav", `{"label":"x"}`); w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	if m := audio.ReadMeta(wav); m.DownbeatFrame == nil {
+		t.Error("an unrelated patch cleared the downbeat")
+	}
+	for _, bad := range []string{`{"downbeat_frame":-1}`, `{"downbeat_frame":1000}`, `{"downbeat_frame":"x"}`} {
+		if w := patch(t, r, "jam_d.wav", bad); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", bad, w.Code)
+		}
+	}
+	if w := patch(t, r, "jam_d.wav", `{"downbeat_frame":null}`); w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	if m := audio.ReadMeta(wav); m.DownbeatFrame != nil {
+		t.Error("null did not clear the downbeat")
 	}
 }
 
@@ -1030,5 +1064,206 @@ func TestConcurrentPatchesLeaveTheTakeParseable(t *testing.T) {
 	}
 	if after.DataBytes != before.DataBytes {
 		t.Errorf("DataBytes = %d, want unchanged %d: a cue race must never touch the audio", after.DataBytes, before.DataBytes)
+	}
+}
+
+func TestPeaksRangeComputesOnDemand(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_r.wav", 4800)
+
+	w := do(t, r, http.MethodGet, "/api/peaks?file=jam_r.wav&from=480&to=960&buckets=8")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	var pd audio.PeakData
+	if err := json.Unmarshal(w.Body.Bytes(), &pd); err != nil {
+		t.Fatal(err)
+	}
+	if pd.From != 480 || pd.Buckets != 8 || pd.Channels != 2 || len(pd.Data[0]) != 16 {
+		t.Errorf("got from=%d buckets=%d ch=%d len=%d", pd.From, pd.Buckets, pd.Channels, len(pd.Data[0]))
+	}
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("Cache-Control = %q, want immutable: a take's samples never change", cc)
+	}
+}
+
+func TestPeaksRangeRejectsBadWindows(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_r.wav", 1000)
+	for _, q := range []string{
+		"from=0&to=1001&buckets=4",  // past the end
+		"from=10&to=10&buckets=4",   // empty
+		"from=-1&to=10&buckets=4",   // negative
+		"from=0&to=10&buckets=0",    // no buckets
+		"from=0&to=10&buckets=4097", // over the cap
+		"from=0&to=10",              // partial: all three or none
+		"from=x&to=10&buckets=4",    // not a number
+	} {
+		w := do(t, r, http.MethodGet, "/api/peaks?file=jam_r.wav&"+q)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
+	}
+}
+
+func TestPeaksRangeOnAMissingTakeIs404(t *testing.T) {
+	r, _ := newTestAPI(t)
+	w := do(t, r, http.MethodGet, "/api/peaks?file=jam_nope.wav&from=0&to=10&buckets=4")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func postJSON(t *testing.T, r *mux.Router, url, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestCutWritesANewTakeAndReturnsItsName(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_src.wav", 48000)
+
+	w := postJSON(t, r, "/api/cut?file=jam_src.wav", `{"start_frame":1000,"end_frame":9000,"label":" hit "}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	var body struct{ Name string }
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if !strings.HasPrefix(body.Name, "jam_") || !strings.HasSuffix(body.Name, ".wav") || body.Name == "jam_src.wav" {
+		t.Fatalf("name = %q", body.Name)
+	}
+	info, err := audio.ReadWAVInfo(filepath.Join(dir, body.Name))
+	if err != nil || info.Frames() != 8000 {
+		t.Errorf("frames = %d err = %v, want 8000", info.Frames(), err)
+	}
+	if m := audio.ReadMeta(filepath.Join(dir, body.Name)); m.Label != "hit" {
+		t.Errorf("label = %q, want sanitized %q", m.Label, "hit")
+	}
+	// It shows up in the list.
+	lw := do(t, r, http.MethodGet, "/api/jams")
+	if !strings.Contains(lw.Body.String(), body.Name) {
+		t.Error("cut is not listed")
+	}
+	if !strings.Contains(lw.Body.String(), `"source"`) {
+		t.Error("cut lineage is not listed")
+	}
+}
+
+func TestCutValidation(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_src.wav", 48000)
+	cases := map[string]struct {
+		url, body string
+		want      int
+	}{
+		"missing take": {"/api/cut?file=jam_nope.wav", `{"start_frame":0,"end_frame":1000}`, http.StatusNotFound},
+		"bad json":     {"/api/cut?file=jam_src.wav", `{`, http.StatusBadRequest},
+		"inverted":     {"/api/cut?file=jam_src.wav", `{"start_frame":500,"end_frame":100}`, http.StatusBadRequest},
+		"past end":     {"/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":48001}`, http.StatusBadRequest},
+		"too short":    {"/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":288}`, http.StatusBadRequest},
+		"no file":      {"/api/cut", `{"start_frame":0,"end_frame":1000}`, http.StatusBadRequest},
+		"traversal":    {"/api/cut?file=../jam_src.wav", `{"start_frame":0,"end_frame":1000}`, http.StatusBadRequest},
+	}
+	for name, c := range cases {
+		if w := postJSON(t, r, c.url, c.body); w.Code != c.want {
+			t.Errorf("%s: status = %d, want %d (%s)", name, w.Code, c.want, w.Body.String())
+		}
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Errorf("rejected cuts left files: %d entries", len(entries))
+	}
+}
+
+func TestCutRefusesWhenDiskIsLow(t *testing.T) {
+	dir := t.TempDir()
+	a := New(&config.Config{OutputDir: dir, MinFreeGB: 1e9}, nil, nil, nil, nil)
+	r := mux.NewRouter()
+	a.SetupRoutes(r)
+	writeRealTake(t, dir, "jam_src.wav", 48000)
+	if w := postJSON(t, r, "/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":1000}`); w.Code != http.StatusInsufficientStorage {
+		t.Errorf("status = %d, want 507", w.Code)
+	}
+}
+
+func TestSliceStreamsASixteenBitWAV(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_s.wav", 48000)
+	w := do(t, r, http.MethodGet, "/api/slice?file=jam_s.wav&from=100&to=2100")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "audio/wav" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(44+2000*2*2) {
+		t.Errorf("Content-Length = %q, want %d", cl, 44+2000*2*2)
+	}
+	if w.Body.Len() != 44+2000*2*2 {
+		t.Errorf("body = %d bytes", w.Body.Len())
+	}
+	for _, q := range []string{"from=0&to=0", "from=0&to=48001", "from=0", "from=a&to=10"} {
+		if w := do(t, r, http.MethodGet, "/api/slice?file=jam_s.wav&"+q); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
+	}
+	if w := do(t, r, http.MethodGet, "/api/slice?file=jam_nope.wav&from=0&to=10"); w.Code != http.StatusNotFound {
+		t.Errorf("missing: status = %d, want 404", w.Code)
+	}
+}
+
+// docs/api.md promises HEAD on every GET route but /api/live, and a HEAD is
+// how a client sizes a slice before deciding to fetch it.
+func TestSliceAnswersHEADWithHeadersAndNoBody(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_s.wav", 48000)
+	w := do(t, r, http.MethodHead, "/api/slice?file=jam_s.wav&from=100&to=2100")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "audio/wav" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(44+2000*2*2) {
+		t.Errorf("Content-Length = %q, want %d", cl, 44+2000*2*2)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("body = %d bytes, want none on a HEAD", w.Body.Len())
+	}
+}
+
+func TestSliceRejectsANonThirtyTwoBitTake(t *testing.T) {
+	r, dir := newTestAPI(t)
+	le := binary.LittleEndian
+	frames, channels, sampleRate := 100, 2, 48000
+	dataBytes := uint32(frames * channels * 2)
+	var hdr [44]byte
+	copy(hdr[0:4], "RIFF")
+	le.PutUint32(hdr[4:8], dataBytes+36)
+	copy(hdr[8:12], "WAVE")
+	copy(hdr[12:16], "fmt ")
+	le.PutUint32(hdr[16:20], 16)
+	le.PutUint16(hdr[20:22], 1)
+	le.PutUint16(hdr[22:24], uint16(channels))
+	le.PutUint32(hdr[24:28], uint32(sampleRate))
+	le.PutUint32(hdr[28:32], uint32(sampleRate*channels*2))
+	le.PutUint16(hdr[32:34], uint16(channels*2))
+	le.PutUint16(hdr[34:36], 16)
+	copy(hdr[36:40], "data")
+	le.PutUint32(hdr[40:44], dataBytes)
+	buf := append(hdr[:], make([]byte, dataBytes)...)
+	if err := os.WriteFile(filepath.Join(dir, "jam_16.wav"), buf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, r, http.MethodGet, "/api/slice?file=jam_16.wav&from=0&to=10")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct == "audio/wav" {
+		t.Errorf("Content-Type = %q, want no audio/wav on a rejected slice", ct)
 	}
 }

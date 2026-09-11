@@ -1,6 +1,6 @@
 # HTTP API
 
-Eleven routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
+Thirteen routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
 else the server answers is the static UI under `web/static`.
 
 There is **no authentication and no rate limiting**. `DELETE /api/delete`
@@ -21,6 +21,8 @@ internet.
 | `GET /api/peaks?file=` | Precomputed waveform, so phones do not download audio to draw one |
 | `GET /api/download?file=[&dl=1]` | Stream inline, or force a download |
 | `DELETE /api/delete?file=` | Remove a take and its sidecars |
+| `POST /api/cut?file=` | Export a region of a take as a new take, with 3ms declick fades |
+| `GET /api/slice?file=&from=&to=` | A region as a 16-bit WAV with the same fades a cut gets, for auditioning |
 
 `GET` routes also accept `HEAD`, except `/api/live`, which is a WebSocket
 upgrade.
@@ -179,9 +181,14 @@ how a take stays in reach once newer ones have pushed it down.
   "label": "",
   "starred": false,
   "bpm": 96,
-  "flags": [{ "frame": 100 }, { "frame": 900 }]
+  "flags": [{ "frame": 100 }, { "frame": 900 }],
+  "downbeat_frame": null,
+  "source": { "name": "jam_src.wav", "start_frame": 1000, "end_frame": 9000 }
 }]
 ```
+
+`source` is present only on a take that was cut from another (see
+`POST /api/cut` below); it is absent for a take saved from the ring.
 
 Duration and layout come from each file's own header, so takes recorded under
 an older channel configuration still report correctly.
@@ -209,11 +216,12 @@ curl -X PATCH 'http://127.0.0.1:5000/api/take?file=jam_2026-09-09_145852.wav' \
 | `trim` | `{start_frame, end_frame}` or `null` | `start_frame` must be `>= 0` **and** `end_frame` must exceed `start_frame`; `null` clears |
 | `bpm` | number or `null` | 20–400, rounded to two decimals; rejects NaN and ±Inf; `null` clears |
 | `flags` | `[{frame, label}]` or `null` | A full replacement of the take's flags. Capped at 512; `frame` must be `>= 0` and less than the take's frame count; `null` clears. `label` is sanitized like the take label (control characters stripped, trimmed, 120 runes) |
+| `downbeat_frame` | integer or `null` | Where bar 1 falls, for the waveform page's grid. `>= 0` and less than the take's frame count; `null` clears |
 
 The response is the merged result:
 
 ```json
-{ "label": "warm-up", "starred": true, "trim": null, "bpm": 128, "flags": [] }
+{ "label": "warm-up", "starred": true, "trim": null, "bpm": 128, "flags": [], "downbeat_frame": null }
 ```
 
 If `flags` changed, the sidecar write is also mirrored into the WAV as RIFF
@@ -291,6 +299,12 @@ a phone can draw a take without downloading the audio.
 400 if `file` is missing or is not a bare `.wav` name, 404 if peaks have not
 been generated. Served immutable — a take's peaks never change.
 
+With `from`, `to` (frames, `0 <= from < to <= frames`) and `buckets`
+(`1..4096`) given together, the peaks are computed on demand over exactly
+that range instead of served from the file. The response has the same shape
+plus `"from"`, and `duration` describes the range. All three or none: a
+partial set is 400. The waveform page uses this for every zoomed view.
+
 ## `GET /api/download?file=[&dl=1]`
 
 Serves the take or its mp3 preview, with range requests. Only `.wav` and `.mp3`
@@ -300,6 +314,43 @@ Inline by default so `<audio>` can stream it. `dl` adds a
 `Content-Disposition: attachment` header instead — **any non-empty value**, so
 `dl=0` and `dl=false` force the download just as `dl=1` does. 400 if `file` is
 missing or rejected, 404 if it is not there.
+
+## `POST /api/cut?file=`
+
+Body:
+
+```json
+{ "start_frame": 480000, "end_frame": 998400, "label": "the drop" }
+```
+
+Writes frames `[start_frame, end_frame)` of the take as a new take
+`jam_<now>.wav` in the same directory, with a linear 3ms fade at each edge
+and the audio between them byte-identical to the source. The new sidecar
+carries the given `label` (sanitized like a take label; default
+`"<source label or stem> cut"`), the source's `bpm`, any flags inside the
+region rebased to it, and a `source` field `{name, start_frame, end_frame}`.
+Star, trim and downbeat are not copied. The source is never modified.
+The preview mp3 is rendered in the background, as after a save.
+
+Response: `200 {"name": "jam_2026-09-10_221441.wav"}`.
+
+| Status | When |
+|---|---|
+| 400 | Bad `file`, malformed body, inverted or out-of-range frames, or a region shorter than two fades (289 frames at 48kHz) |
+| 404 | No such take |
+| 507 | Below `MIN_FREE_GB` |
+
+## `GET /api/slice?file=&from=&to=`
+
+Streams frames `[from, to)` as a complete **16-bit** PCM WAV with the same
+3ms fades `POST /api/cut` applies, so what the waveform page loops is exactly
+what a cut will produce. 16-bit because browsers cannot reliably decode
+32-bit integer WAV. Capped at 60 seconds. `Content-Length` is exact.
+
+| Status | When |
+|---|---|
+| 400 | Bad `file`, non-integer or inverted frames, past the end, or over 60s |
+| 404 | No such take |
 
 ## `DELETE /api/delete?file=`
 

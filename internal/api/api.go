@@ -71,12 +71,14 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/trigger", a.handleTrigger).Methods(http.MethodPost)
 	r.HandleFunc("/api/delete", a.handleDelete).Methods(http.MethodDelete)
 	r.HandleFunc("/api/take", a.handleTakePatch).Methods(http.MethodPatch)
+	r.HandleFunc("/api/cut", a.handleCut).Methods(http.MethodPost)
 	r.HandleFunc("/api/flag", a.handleFlagPost).Methods(http.MethodPost)
 	r.HandleFunc("/api/flag", a.handleFlagDelete).Methods(http.MethodDelete)
 	r.HandleFunc("/api/download", a.handleDownload).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/peaks", a.handlePeaks).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
+	r.HandleFunc("/api/slice", a.handleSlice).Methods(http.MethodGet, http.MethodHead)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -335,6 +337,12 @@ func (a *API) handlePeaks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q := r.URL.Query()
+	hasRange := q.Has("from") || q.Has("to") || q.Has("buckets")
+	if hasRange {
+		a.handlePeaksRange(w, r, name)
+		return
+	}
 	path := filepath.Join(a.cfg.OutputDir, strings.TrimSuffix(name, ".wav")+".peaks.json")
 	f, err := os.Open(path)
 	if err != nil {
@@ -345,6 +353,50 @@ func (a *API) handlePeaks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, "peaks.json", statModTime(f), f)
+}
+
+// handlePeaksRange computes peaks for [from, to) on demand. All three params
+// are required together: a partial request is a client bug, not a request
+// for the file. The result is immutable for the same reason the file is --
+// a take's samples never change after save -- so it is cached the same way.
+func (a *API) handlePeaksRange(w http.ResponseWriter, r *http.Request, name string) {
+	q := r.URL.Query()
+	if !(q.Has("from") && q.Has("to") && q.Has("buckets")) {
+		writeErr(w, http.StatusBadRequest, "from, to and buckets are required together")
+		return
+	}
+	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, err2 := strconv.ParseInt(q.Get("to"), 10, 64)
+	buckets, err3 := strconv.Atoi(q.Get("buckets"))
+	if err1 != nil || err2 != nil || err3 != nil {
+		writeErr(w, http.StatusBadRequest, "from, to and buckets must be integers")
+		return
+	}
+	if from < 0 || to <= from {
+		writeErr(w, http.StatusBadRequest, "need 0 <= from < to")
+		return
+	}
+	if buckets < 1 || buckets > audio.MaxRangeBuckets {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("buckets must be 1..%d", audio.MaxRangeBuckets))
+		return
+	}
+	path := filepath.Join(a.cfg.OutputDir, name)
+	if _, err := os.Stat(path); err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	pd, err := audio.RangePeaks(path, from, to, buckets)
+	switch {
+	case errors.Is(err, audio.ErrRange):
+		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
+		return
+	case err != nil:
+		log.Printf("range peaks %s: %v", name, err)
+		writeErr(w, http.StatusInternalServerError, "could not compute peaks")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	writeJSON(w, http.StatusOK, pd)
 }
 
 // maxBuckets caps what a client can ask for. The ribbon wants about one bucket
@@ -481,6 +533,113 @@ const (
 	maxBPM = 400.0
 )
 
+// handleCut exports a region of a take as a new take. It takes the frames
+// from the body, not from the take's trim, so the page can export without a
+// round trip to save the region first and a script can cut any range.
+//
+// The disk guard is the same one Save applies, for the same reason: a cut
+// of a 15-minute take is a 15-minute take.
+func (a *API) handleCut(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := os.Stat(filepath.Join(a.cfg.OutputDir, name)); err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	var body struct {
+		StartFrame int64  `json:"start_frame"`
+		EndFrame   int64  `json:"end_frame"`
+		Label      string `json:"label"`
+	}
+	if err := dec.Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.StartFrame < 0 || body.EndFrame <= body.StartFrame {
+		writeErr(w, http.StatusBadRequest, "need 0 <= start_frame < end_frame")
+		return
+	}
+	if free, _ := audio.FreeGB(a.cfg.OutputDir); free < a.cfg.MinFreeGB {
+		writeErr(w, http.StatusInsufficientStorage,
+			fmt.Sprintf("low disk: %.2f GB free, need %.2f GB", free, a.cfg.MinFreeGB))
+		return
+	}
+
+	out, err := audio.Cut(a.cfg.OutputDir, audio.CutRequest{
+		Source: name, StartFrame: body.StartFrame, EndFrame: body.EndFrame,
+		Label: sanitizeLabel(body.Label),
+	}, time.Now())
+	switch {
+	case errors.Is(err, audio.ErrRange):
+		writeErr(w, http.StatusBadRequest, "region is past the end of the take")
+		return
+	case errors.Is(err, audio.ErrTooShort):
+		writeErr(w, http.StatusBadRequest, "region is too short to cut")
+		return
+	case err != nil:
+		log.Printf("cut %s: %v", name, err)
+		writeErr(w, http.StatusInternalServerError, "could not cut")
+		return
+	}
+	// The preview needs ffmpeg and the channel config; never block the
+	// response on it, and never fail the cut because of it -- same as Save.
+	go audio.MakePreview(a.cfg, filepath.Join(a.cfg.OutputDir, out), len(a.cfg.OutChannels()))
+	writeJSON(w, http.StatusOK, map[string]string{"name": out})
+}
+
+// handleSlice streams a faded 16-bit WAV of [from, to) for the waveform
+// page's region loop. Content-Length is set from the frame count so the
+// browser can show progress; nothing is buffered server-side.
+func (a *API) handleSlice(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	q := r.URL.Query()
+	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, err2 := strconv.ParseInt(q.Get("to"), 10, 64)
+	if err1 != nil || err2 != nil || from < 0 || to <= from {
+		writeErr(w, http.StatusBadRequest, "need integer 0 <= from < to")
+		return
+	}
+	path := filepath.Join(a.cfg.OutputDir, name)
+	info, err := audio.ReadWAVInfo(path)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if info.BitsPerSample != 32 {
+		writeErr(w, http.StatusBadRequest, "only 32-bit takes can be sliced")
+		return
+	}
+	if to > info.Frames() {
+		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
+		return
+	}
+	if to-from > int64(audio.MaxSliceSeconds*info.SampleRate) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("slice longer than %ds", audio.MaxSliceSeconds))
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", strconv.FormatInt(audio.SliceBytes(info, from, to), 10))
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// A HEAD gets the same headers -- Content-Length above is the whole point
+	// of asking -- but none of the bytes, and none of the read of the take.
+	if r.Method == http.MethodHead {
+		return
+	}
+	if err := audio.WriteSlice16(w, path, from, to); err != nil {
+		// Headers are gone; all we can do is log and let the client see a
+		// short body, which decodeAudioData rejects.
+		log.Printf("slice %s: %v", name, err)
+	}
+}
+
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a
 // replace: pointers (and a RawMessage for trim) distinguish "field absent"
 // from "field set to its zero value", so starring a take cannot silently clear
@@ -501,11 +660,12 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	var body struct {
-		Label   *string         `json:"label"`
-		Starred *bool           `json:"starred"`
-		Trim    json.RawMessage `json:"trim"`
-		BPM     json.RawMessage `json:"bpm"`
-		Flags   json.RawMessage `json:"flags"`
+		Label    *string         `json:"label"`
+		Starred  *bool           `json:"starred"`
+		Trim     json.RawMessage `json:"trim"`
+		BPM      json.RawMessage `json:"bpm"`
+		Flags    json.RawMessage `json:"flags"`
+		Downbeat json.RawMessage `json:"downbeat_frame"`
 	}
 	if err := dec.Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -562,6 +722,24 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 			}
 			v = math.Round(v*100) / 100
 			m.BPM = &v
+		}
+	}
+
+	// RawMessage like the others: absent, null and a value are three states.
+	if body.Downbeat != nil {
+		if string(body.Downbeat) == "null" {
+			m.DownbeatFrame = nil
+		} else {
+			var v int64
+			if err := json.Unmarshal(body.Downbeat, &v); err != nil || v < 0 {
+				writeErr(w, http.StatusBadRequest, "downbeat_frame must be a non-negative integer")
+				return
+			}
+			if info, err := audio.ReadWAVInfo(wav); err == nil && v >= info.Frames() {
+				writeErr(w, http.StatusBadRequest, "downbeat_frame is past the end of the take")
+				return
+			}
+			m.DownbeatFrame = &v
 		}
 	}
 
@@ -649,8 +827,9 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		Trim     *audio.Trim  `json:"trim"`
 		BPM      *float64     `json:"bpm"`
 		Flags    []audio.Flag `json:"flags"`
+		Downbeat *int64       `json:"downbeat_frame"`
 		CueError string       `json:"cue_error,omitempty"`
-	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags, CueError: cueErr})
+	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags, Downbeat: m.DownbeatFrame, CueError: cueErr})
 }
 
 // sanitizeLabel prepares a user-supplied label for storage. It strips control

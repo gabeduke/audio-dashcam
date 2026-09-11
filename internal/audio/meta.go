@@ -59,6 +59,14 @@ func NormalizeFlags(in []Flag) []Flag {
 	return out
 }
 
+// CutSource is a cut's lineage: the take it was cut from and the frame range,
+// in the source's frames.
+type CutSource struct {
+	Name       string `json:"name"`
+	StartFrame int64  `json:"start_frame"`
+	EndFrame   int64  `json:"end_frame"`
+}
+
 // Meta is the per-take sidecar. Every field but Version is optional: an absent
 // sidecar means an unnamed, unstarred, untrimmed take, which is what keeps
 // takes recorded before this feature valid without migration.
@@ -67,6 +75,14 @@ type Meta struct {
 	Label   string `json:"label,omitempty"`
 	Starred bool   `json:"starred,omitempty"`
 	Trim    *Trim  `json:"trim,omitempty"`
+
+	// DownbeatFrame is where bar 1 beat 1 falls, for the waveform page's
+	// grid. Optional; absent means "unknown", and the page then starts the
+	// grid at frame 0.
+	DownbeatFrame *int64 `json:"downbeat_frame,omitempty"`
+
+	// Source records where a cut came from. Nil for a take saved from the ring.
+	Source *CutSource `json:"source,omitempty"`
 
 	// BPM is the tempo the take was played at, read from the EP's MIDI clock
 	// at save time and editable afterwards.
