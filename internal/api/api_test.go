@@ -1032,3 +1032,50 @@ func TestConcurrentPatchesLeaveTheTakeParseable(t *testing.T) {
 		t.Errorf("DataBytes = %d, want unchanged %d: a cue race must never touch the audio", after.DataBytes, before.DataBytes)
 	}
 }
+
+func TestPeaksRangeComputesOnDemand(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_r.wav", 4800)
+
+	w := do(t, r, http.MethodGet, "/api/peaks?file=jam_r.wav&from=480&to=960&buckets=8")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	var pd audio.PeakData
+	if err := json.Unmarshal(w.Body.Bytes(), &pd); err != nil {
+		t.Fatal(err)
+	}
+	if pd.From != 480 || pd.Buckets != 8 || pd.Channels != 2 || len(pd.Data[0]) != 16 {
+		t.Errorf("got from=%d buckets=%d ch=%d len=%d", pd.From, pd.Buckets, pd.Channels, len(pd.Data[0]))
+	}
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("Cache-Control = %q, want immutable: a take's samples never change", cc)
+	}
+}
+
+func TestPeaksRangeRejectsBadWindows(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_r.wav", 1000)
+	for _, q := range []string{
+		"from=0&to=1001&buckets=4",  // past the end
+		"from=10&to=10&buckets=4",   // empty
+		"from=-1&to=10&buckets=4",   // negative
+		"from=0&to=10&buckets=0",    // no buckets
+		"from=0&to=10&buckets=4097", // over the cap
+		"from=0&to=10",              // partial: all three or none
+		"from=x&to=10&buckets=4",    // not a number
+	} {
+		w := do(t, r, http.MethodGet, "/api/peaks?file=jam_r.wav&"+q)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
+	}
+}
+
+func TestPeaksRangeOnAMissingTakeIs404(t *testing.T) {
+	r, _ := newTestAPI(t)
+	w := do(t, r, http.MethodGet, "/api/peaks?file=jam_nope.wav&from=0&to=10&buckets=4")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}

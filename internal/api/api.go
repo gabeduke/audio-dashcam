@@ -335,6 +335,12 @@ func (a *API) handlePeaks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	q := r.URL.Query()
+	hasRange := q.Has("from") || q.Has("to") || q.Has("buckets")
+	if hasRange {
+		a.handlePeaksRange(w, r, name)
+		return
+	}
 	path := filepath.Join(a.cfg.OutputDir, strings.TrimSuffix(name, ".wav")+".peaks.json")
 	f, err := os.Open(path)
 	if err != nil {
@@ -345,6 +351,50 @@ func (a *API) handlePeaks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, "peaks.json", statModTime(f), f)
+}
+
+// handlePeaksRange computes peaks for [from, to) on demand. All three params
+// are required together: a partial request is a client bug, not a request
+// for the file. The result is immutable for the same reason the file is --
+// a take's samples never change after save -- so it is cached the same way.
+func (a *API) handlePeaksRange(w http.ResponseWriter, r *http.Request, name string) {
+	q := r.URL.Query()
+	if !(q.Has("from") && q.Has("to") && q.Has("buckets")) {
+		writeErr(w, http.StatusBadRequest, "from, to and buckets are required together")
+		return
+	}
+	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, err2 := strconv.ParseInt(q.Get("to"), 10, 64)
+	buckets, err3 := strconv.Atoi(q.Get("buckets"))
+	if err1 != nil || err2 != nil || err3 != nil {
+		writeErr(w, http.StatusBadRequest, "from, to and buckets must be integers")
+		return
+	}
+	if from < 0 || to <= from {
+		writeErr(w, http.StatusBadRequest, "need 0 <= from < to")
+		return
+	}
+	if buckets < 1 || buckets > audio.MaxRangeBuckets {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("buckets must be 1..%d", audio.MaxRangeBuckets))
+		return
+	}
+	path := filepath.Join(a.cfg.OutputDir, name)
+	if _, err := os.Stat(path); err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	pd, err := audio.RangePeaks(path, from, to, buckets)
+	switch {
+	case errors.Is(err, audio.ErrRange):
+		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
+		return
+	case err != nil:
+		log.Printf("range peaks %s: %v", name, err)
+		writeErr(w, http.StatusInternalServerError, "could not compute peaks")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	writeJSON(w, http.StatusOK, pd)
 }
 
 // maxBuckets caps what a client can ask for. The ribbon wants about one bucket

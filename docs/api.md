@@ -291,6 +291,12 @@ a phone can draw a take without downloading the audio.
 400 if `file` is missing or is not a bare `.wav` name, 404 if peaks have not
 been generated. Served immutable — a take's peaks never change.
 
+With `from`, `to` (frames, `0 <= from < to <= frames`) and `buckets`
+(`1..4096`) given together, the peaks are computed on demand over exactly
+that range instead of served from the file. The response has the same shape
+plus `"from"`, and `duration` describes the range. All three or none: a
+partial set is 400. The waveform page uses this for every zoomed view.
+
 ## `GET /api/download?file=[&dl=1]`
 
 Serves the take or its mp3 preview, with range requests. Only `.wav` and `.mp3`
