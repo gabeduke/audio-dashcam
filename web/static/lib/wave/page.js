@@ -141,18 +141,40 @@ async function main() {
   // the network, and when the slice cannot be fetched it *resolves* after
   // quietly clearing its own loop and falling back to the preview -- it says so
   // through onError, so there is nothing left here to report or to toggle.
+  let loopTimer = 0;
   async function applyLoop(region) {
+    // A direct call is the authority on what should be armed, so it cancels a
+    // debounced one still in flight rather than letting it land afterwards.
+    clearTimeout(loopTimer);
+    // Re-arming what is already armed costs a fetch and a decode and, worse,
+    // restarts the phrase under whoever is playing along to it.
+    if (region && clock.loop && clock.loop.start === region.start && clock.loop.end === region.end) return;
+    if (!region && !clock.loop) return;
     try {
       await clock.setLoop(region);
     } catch (e) {
       toast(`Could not loop: ${e.message}`, 'bad');
     }
   }
+  // Dragging an edge and holding a nudge both emit a *final* region many times
+  // over; only the one the hand settles on is worth a slice. Reads state.region
+  // when it fires, not the region it was handed, so the last edit wins.
+  function scheduleLoop() {
+    clearTimeout(loopTimer);
+    loopTimer = setTimeout(() => applyLoop(state.region), 300);
+  }
 
   // --- view events --------------------------------------------------------
   function emit(ev, p) {
     switch (ev) {
-      case 'seek': clock.seek(p.frame); state.cursor = p.frame; updateReadout(); redraw(); break;
+      case 'seek':
+        clock.seek(p.frame);
+        // A region always loops. Seeking out of the slice makes the clock drop
+        // its loop (clock.js seek()), which would leave the band, the text, the
+        // x and the nudges all claiming a region that no longer plays as one.
+        // The cursor stays where it was tapped; Play picks the loop back up.
+        if (state.region && !clock.loop) applyLoop(state.region);
+        state.cursor = p.frame; updateReadout(); redraw(); break;
       case 'addFlag':
         if (state.flags.some((f) => f.frame === p.frame)) break;
         state.flags.push({ frame: p.frame, label: '' });
@@ -161,7 +183,7 @@ async function main() {
       case 'selectFlag': openSheet(p.flag); break;
       case 'regionChange':
         state.region = p.region; updateActionRow(); redraw();
-        if (p.final) { saveRegion(); applyLoop(state.region); }
+        if (p.final) { saveRegion(); scheduleLoop(); }
         break;
       case 'downbeatChange':
         // The readout is bars and beats *counted from the downbeat*, so moving
@@ -206,7 +228,7 @@ async function main() {
     state.flags = state.flags.filter((x) => x.frame !== f.frame);
     state.selectedFlag = null;
     sheet.hidden = true;
-    saveFlags(); view.draw();
+    saveFlags(); redraw();
   });
 
   // --- transport ----------------------------------------------------------
@@ -356,7 +378,9 @@ async function main() {
   // fires on navigation, and visibilitychange is the only one that reliably
   // fires when the app is switched away from or the screen locks.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushRegion(); });
-  window.addEventListener('pagehide', () => { flushRegion(); clock.destroy(); tiles.stop(); view.destroy(); overview.destroy(); });
+  // flushRegion is the only thing that has to outlive the page; a pending loop
+  // does not -- cancel it so it cannot arm a clock that has just been destroyed.
+  window.addEventListener('pagehide', () => { clearTimeout(loopTimer); flushRegion(); clock.destroy(); tiles.stop(); view.destroy(); overview.destroy(); });
 }
 
 main().catch((e) => fail(e.message || String(e)));
