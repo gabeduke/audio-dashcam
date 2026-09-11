@@ -44,6 +44,15 @@ func TestRenderArgsMonoTakeUpmixes(t *testing.T) {
 	}
 }
 
+func TestRenderArgsNeverEmitsANegativeFadeStart(t *testing.T) {
+	info := WAVInfo{Channels: 2, SampleRate: 48000, BitsPerSample: 32}
+	got := RenderArgs("/t.wav", info, []int{0, 1}, 0, 1)
+	af := got[6]
+	if !strings.Contains(af, "afade=t=out:st=0:d=0.003") {
+		t.Errorf("fade-out start for a 1-frame region should clamp to 0: %q", af)
+	}
+}
+
 func TestRenderFilename(t *testing.T) {
 	cases := []struct {
 		base     string
@@ -86,6 +95,28 @@ func TestRenderMP3Validates(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Error("a rejected render must write nothing")
+	}
+}
+
+func TestRenderMP3RejectsARegionShorterThanTwoFades(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "jam_r.wav")
+	if _, err := WriteWAV(p, make([]int32, 48000*2*2), 2, []int{0, 1}, 48000); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := RenderMP3(context.Background(), &buf, []int{0, 1}, p, 0, 288); !errors.Is(err, ErrTooShort) {
+		t.Errorf("288 frames: %v, want ErrTooShort", err)
+	}
+	if buf.Len() != 0 {
+		t.Error("a rejected render must write nothing")
+	}
+	buf.Reset()
+	err := RenderMP3(context.Background(), &buf, []int{0, 1}, p, 0, 289)
+	if errors.Is(err, ErrTooShort) || errors.Is(err, ErrRange) {
+		t.Errorf("289 frames should pass validation, got %v", err)
+	}
+	if _, lookErr := exec.LookPath("ffmpeg"); lookErr == nil && err != nil {
+		t.Errorf("289 frames with ffmpeg on PATH: %v, want success", err)
 	}
 }
 

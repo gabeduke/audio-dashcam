@@ -29,9 +29,13 @@ const renderFadeSeconds = 0.003
 // MakePreview does; a mono take is upmixed. Output goes to stdout.
 func RenderArgs(wavPath string, info WAVInfo, saveChannels []int, from, to int64) []string {
 	dur := float64(to-from) / float64(info.SampleRate)
+	st := dur - renderFadeSeconds
+	if st < 0 {
+		st = 0
+	}
 	chain := fmt.Sprintf(
 		"atrim=start_sample=%d:end_sample=%d,asetpts=PTS-STARTPTS,afade=t=in:st=0:d=%g,afade=t=out:st=%s:d=%g",
-		from, to, renderFadeSeconds, trimFloat(dur-renderFadeSeconds), renderFadeSeconds,
+		from, to, renderFadeSeconds, trimFloat(st), renderFadeSeconds,
 	)
 	if info.Channels > 2 {
 		l, r := 0, 0
@@ -102,6 +106,9 @@ func RenderMP3(ctx context.Context, w io.Writer, saveChannels []int, wavPath str
 	}
 	if from < 0 || to <= from || to > info.Frames() {
 		return fmt.Errorf("%w: [%d, %d) of %d frames", ErrRange, from, to, info.Frames())
+	}
+	if to-from < 2*FadeFrames(info.SampleRate)+1 {
+		return ErrTooShort
 	}
 	if to-from > int64(MaxRenderSeconds*info.SampleRate) {
 		return ErrRenderTooLong
