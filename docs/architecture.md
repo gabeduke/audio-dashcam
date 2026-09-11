@@ -203,10 +203,15 @@ an HTTPS name and stay quiet otherwise.
 
 ### The waveform page
 
-`web/static/lib/wave/` is five modules: `geometry` (pure pixel/frame math,
-node-tested), `tiles` (fetches and caches `/api/peaks` ranges), `view`
-(canvas rendering and gestures), `clock` (playback position), and `page`
-(wiring). It is backed by three endpoints: `GET /api/peaks?file=&from=&to=&buckets=`
+`web/static/lib/wave/` is seven modules: `geometry` (pure pixel/frame math,
+node-tested), `tiles` (fetches and caches `/api/peaks` ranges), `overview`
+(the strip above the main waveform — drag, tap and double-tap-to-fit
+navigation, node-tested), `view` (canvas rendering and gestures: one-finger
+drag selects a region, which always loops; wheel/pinch/two-finger zoom and
+pan), `clock` (playback position), `share` (MP3 sniffing and the
+share-sheet/download fallback for a rendered region, node-tested), and `page`
+(wiring). It is backed by four endpoints: `GET /api/peaks?file=&from=&to=&buckets=`
 for on-demand ranges, `POST /api/cut?file=` to export a region as a new take
-with declick fades, and `GET /api/slice?file=&from=&to=` to audition a region
-before cutting it.
+with declick fades, `GET /api/slice?file=&from=&to=` to audition a region
+before cutting it, and `GET /api/render?file=&from=&to=` to stream an MP3 of
+the region through ffmpeg for the share sheet.
