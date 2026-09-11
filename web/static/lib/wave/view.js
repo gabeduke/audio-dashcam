@@ -12,6 +12,12 @@ const TAP_MS = 300;
 const MIN_FPP = 1 / 8;   // 8 px per frame: far enough
 const CHIP_H = 16;
 const DOWNBEAT_HIT_H = 24; // the downbeat is only grabbable in the top strip
+const DOUBLE_TAP_MOVE = 20;
+const MIN_PINCH = 8;       // below this the ratio g.dist/dist goes wild
+
+// True separation of two fingers, floored so a near-vertical pinch cannot
+// divide by ~0 and fling the zoom.
+function pinchDist(a, b) { return Math.max(MIN_PINCH, Math.hypot(a.x - b.x, a.y - b.y)); }
 
 export class WaveView {
   constructor({ canvas, tiles, totalFrames, sampleRate, getState, emit }) {
@@ -28,6 +34,7 @@ export class WaveView {
     this.cssH = 0;
     this.raf = 0;
     this.fitted = false;      // has a first real layout happened yet?
+    this.destroyed = false;
     this.pointers = new Map();
     this.gesture = null;      // { kind, ...}
     this.lastTap = null;
@@ -49,6 +56,7 @@ export class WaveView {
   }
 
   destroy() {
+    this.destroyed = true;
     this.ro.disconnect();
     this.ac.abort();
     cancelAnimationFrame(this.raf);
@@ -83,6 +91,9 @@ export class WaveView {
     this.clampView(); this.changed();
   }
   clampView() {
+    // fpp first: a resize changes what maxFpp() means, and leaving fpp above it
+    // would leave width*fpp > total, i.e. dead space past the end of the file.
+    this.view.fpp = Math.min(this.maxFpp(), Math.max(MIN_FPP, this.view.fpp));
     const span = this.view.width * this.view.fpp;
     this.view.start = Math.max(0, Math.min(this.total - span, this.view.start));
     if (span >= this.total) this.view.start = 0;
@@ -90,7 +101,7 @@ export class WaveView {
   changed() { this.emit('viewChange', { view: { ...this.view } }); this.draw(); }
 
   draw() {
-    if (this.raf) return;
+    if (this.destroyed || this.raf) return;
     this.raf = requestAnimationFrame(() => { this.raf = 0; this.paint(); });
   }
 
@@ -204,19 +215,26 @@ export class WaveView {
     // never also pans. A third finger must not fall through to the hit test.
     if (this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
-      this.gesture = { kind: 'pinch', dist: Math.abs(a.x - b.x) || 1, mid: (a.x + b.x) / 2, fpp: this.view.fpp, start: this.view.start };
+      this.gesture = { kind: 'pinch', dist: pinchDist(a, b), mid: (a.x + b.x) / 2, fpp: this.view.fpp, start: this.view.start };
+      this.lastTap = null;
       return;
     }
     const st = this.getState();
     const h = this.hit(p.x, p.y, st);
     const base = { x0: p.x, y0: p.y, t0: performance.now(), moved: false, start: this.view.start };
+    // Every drag carries the offset from the grab point to the thing being
+    // dragged, so the first pointermove nudges it instead of teleporting it
+    // under the finger.
     switch (h.kind) {
-      case 'handle': this.gesture = { ...base, kind: 'handle', edge: h.edge, region: { ...st.region } }; break;
+      case 'handle': this.gesture = { ...base, kind: 'handle', edge: h.edge, region: { ...st.region }, grabOffset: p.x - frameToX(st.region[h.edge], this.view) }; break;
       case 'region': this.gesture = { ...base, kind: 'moveRegion', region: { ...st.region } }; break;
-      case 'downbeat': this.gesture = { ...base, kind: 'downbeat' }; break;
+      case 'downbeat': this.gesture = { ...base, kind: 'downbeat', grabOffset: p.x - frameToX(st.grid.downbeat, this.view) }; break;
       case 'flag': this.gesture = { ...base, kind: 'flag', flag: h.flag }; break;
       default: this.gesture = { ...base, kind: 'pan' };
     }
+    // Only a bare-wave tap can be half of a double-tap; anything else breaks
+    // the pair so a tap-then-flag-tap never lands an unwanted flag.
+    if (h.kind !== 'wave') this.lastTap = null;
   }
 
   move(e) {
@@ -227,7 +245,7 @@ export class WaveView {
     if (!g) return;
     if (g.kind === 'pinch' && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
-      const dist = Math.abs(a.x - b.x) || 1;
+      const dist = pinchDist(a, b);
       const mid = (a.x + b.x) / 2;
       const fpp = Math.min(this.maxFpp(), Math.max(MIN_FPP, g.fpp * (g.dist / dist)));
       const anchor = g.start + g.mid * g.fpp; // frame under the original midpoint
@@ -242,7 +260,7 @@ export class WaveView {
       case 'pan':
         this.view.start = g.start - dx * this.view.fpp; this.clampView(); this.changed(); break;
       case 'handle': {
-        const f = xToFrame(p.x, this.view);
+        const f = xToFrame(p.x - g.grabOffset, this.view);
         const r = { ...g.region, [g.edge]: f };
         if (g.edge === 'start') r.start = Math.min(r.start, r.end - this.minLen);
         else r.end = Math.max(r.end, r.start + this.minLen);
@@ -257,7 +275,7 @@ export class WaveView {
         this.draw(); break;
       }
       case 'downbeat':
-        this.emit('downbeatChange', { frame: Math.max(0, Math.min(this.total - 1, xToFrame(p.x, this.view))), final: false });
+        this.emit('downbeatChange', { frame: Math.max(0, Math.min(this.total - 1, xToFrame(p.x - g.grabOffset, this.view))), final: false });
         this.draw(); break;
       default: break;
     }
@@ -278,7 +296,7 @@ export class WaveView {
       case 'handle':
       case 'moveRegion':
         if (g.moved) this.emit('regionChange', { region: st.region, final: true });
-        else if (g.kind === 'moveRegion') this.emit('seek', { frame: xToFrame(p.x, this.view) });
+        else if (g.kind === 'moveRegion' && isTap) this.emit('seek', { frame: xToFrame(p.x, this.view) });
         break;
       case 'downbeat':
         if (g.moved) this.emit('downbeatChange', { frame: st.grid.downbeat, final: true });
@@ -291,11 +309,11 @@ export class WaveView {
       case 'pan':
         if (isTap) {
           const now = performance.now();
-          if (this.lastTap && now - this.lastTap.t < TAP_MS && Math.abs(p.x - this.lastTap.x) < 20) {
+          if (this.lastTap && now - this.lastTap.t < TAP_MS && Math.hypot(p.x - this.lastTap.x, p.y - this.lastTap.y) < DOUBLE_TAP_MOVE) {
             this.lastTap = null;
             this.emit('addFlag', { frame: xToFrame(p.x, this.view) });
           } else {
-            this.lastTap = { t: now, x: p.x };
+            this.lastTap = { t: now, x: p.x, y: p.y };
             this.emit('seek', { frame: xToFrame(p.x, this.view) });
           }
         }
