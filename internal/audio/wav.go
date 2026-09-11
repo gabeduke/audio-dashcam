@@ -228,6 +228,9 @@ type WAVInfo struct {
 	SampleRate    int
 	BitsPerSample int
 	DataBytes     int64
+	// DataOffset is the byte offset of the first sample, i.e. just past the
+	// data chunk header. 44 for every take this app writes.
+	DataOffset int64
 }
 
 // Duration reports the take length in seconds.
@@ -237,6 +240,15 @@ func (w WAVInfo) Duration() float64 {
 		return 0
 	}
 	return float64(w.DataBytes) / float64(bytesPerFrame*w.SampleRate)
+}
+
+// Frames reports the number of sample frames in the data chunk.
+func (w WAVInfo) Frames() int64 {
+	bpf := int64(w.Channels * w.BitsPerSample / 8)
+	if bpf <= 0 {
+		return 0
+	}
+	return w.DataBytes / bpf
 }
 
 // ReadWAVInfo parses a WAV header by walking its chunks. Reading the real
@@ -296,6 +308,11 @@ func ReadWAVInfo(path string) (WAVInfo, error) {
 			if !sawFmt {
 				return info, fmt.Errorf("data chunk before fmt chunk")
 			}
+			off, err := f.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return info, err
+			}
+			info.DataOffset = off
 			return info, nil
 		default:
 			if _, err := f.Seek(size+size%2, io.SeekCurrent); err != nil {
