@@ -1216,6 +1216,26 @@ func TestSliceStreamsASixteenBitWAV(t *testing.T) {
 	}
 }
 
+// docs/api.md promises HEAD on every GET route but /api/live, and a HEAD is
+// how a client sizes a slice before deciding to fetch it.
+func TestSliceAnswersHEADWithHeadersAndNoBody(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_s.wav", 48000)
+	w := do(t, r, http.MethodHead, "/api/slice?file=jam_s.wav&from=100&to=2100")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "audio/wav" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(44+2000*2*2) {
+		t.Errorf("Content-Length = %q, want %d", cl, 44+2000*2*2)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("body = %d bytes, want none on a HEAD", w.Body.Len())
+	}
+}
+
 func TestSliceRejectsANonThirtyTwoBitTake(t *testing.T) {
 	r, dir := newTestAPI(t)
 	le := binary.LittleEndian

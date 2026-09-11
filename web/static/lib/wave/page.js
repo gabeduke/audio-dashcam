@@ -54,7 +54,14 @@ async function main() {
 
   // --- pieces --------------------------------------------------------------
   const canvas = $('wave-canvas');
-  const tiles = new TileCache({ file, totalFrames: total, filePeaks, onChange: () => view.draw() });
+  const tiles = new TileCache({
+    file, totalFrames: total, filePeaks,
+    onChange: () => view.draw(),
+    // A 404 mid-session means the take was deleted under us. TileCache has
+    // already stopped fetching; all that is left is to say so. The back link
+    // in the top bar is always there, so the error block is the whole UI.
+    onGone: () => fail('That take is gone.'),
+  });
   const view = new WaveView({ canvas, tiles, totalFrames: total, sampleRate: sr, getState: () => state, emit });
   // A take whose preview has not landed yet has no URL to play: say so once
   // rather than fetching '/api/download?file=undefined' on the first tap.
@@ -66,6 +73,7 @@ async function main() {
     sampleRate: sr, file,
     onTick: (frame) => { state.cursor = frame; updateReadout(); view.draw(); },
     onError: (m) => toast(m, 'bad'),
+    onEnded: () => { $('play').textContent = 'Play'; },
   });
 
   // --- sidecar patches ----------------------------------------------------
@@ -188,8 +196,11 @@ async function main() {
   // --- transport ----------------------------------------------------------
   let loopOn = false;
   $('play').addEventListener('click', async () => {
-    if (clock.playing) { clock.pause(); $('play').textContent = 'Play'; }
-    else { await clock.play(); $('play').textContent = 'Pause'; }
+    if (clock.playing) clock.pause();
+    else await clock.play();
+    // play() can fail (no preview yet, autoplay refused) and resolve anyway,
+    // so the label follows the clock rather than what we asked it to do.
+    $('play').textContent = clock.playing ? 'Pause' : 'Play';
   });
   $('loop').addEventListener('click', async () => {
     if (!state.region) { toast('Set a region first'); return; }
@@ -197,7 +208,7 @@ async function main() {
     // aria-pressed flips only after the loop is really armed (applyLoop reads
     // clock.loop), so a slice that failed to load leaves the button off.
     await applyLoop(next ? state.region : null);
-    if (loopOn && !clock.playing) { await clock.play(); $('play').textContent = 'Pause'; }
+    if (loopOn && !clock.playing) { await clock.play(); $('play').textContent = clock.playing ? 'Pause' : 'Play'; }
   });
 
   // --- region row ---------------------------------------------------------

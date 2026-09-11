@@ -78,7 +78,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/peaks", a.handlePeaks).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
-	r.HandleFunc("/api/slice", a.handleSlice).Methods(http.MethodGet)
+	r.HandleFunc("/api/slice", a.handleSlice).Methods(http.MethodGet, http.MethodHead)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -628,6 +628,11 @@ func (a *API) handleSlice(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "audio/wav")
 	w.Header().Set("Content-Length", strconv.FormatInt(audio.SliceBytes(info, from, to), 10))
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// A HEAD gets the same headers -- Content-Length above is the whole point
+	// of asking -- but none of the bytes, and none of the read of the take.
+	if r.Method == http.MethodHead {
+		return
+	}
 	if err := audio.WriteSlice16(w, path, from, to); err != nil {
 		// Headers are gone; all we can do is log and let the client see a
 		// short body, which decodeAudioData rejects.

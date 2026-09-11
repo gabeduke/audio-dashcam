@@ -11,11 +11,12 @@
 export const SLICE_CAP_SECONDS = 60;
 
 export class Clock {
-  constructor({ previewUrl, sampleRate, file, onTick, onError }) {
+  constructor({ previewUrl, sampleRate, file, onTick, onError, onEnded }) {
     this.sr = sampleRate;
     this.file = file;
     this.onTick = onTick;
     this.onError = onError;
+    this.onEnded = onEnded;
     this.audio = new Audio(previewUrl);
     this.audio.preload = 'auto';
     this.ctx = null;          // AudioContext, created on first play (iOS gesture rule)
@@ -28,7 +29,14 @@ export class Clock {
     this.sliceOffset = 0;     // frame offset into the slice at start
     this.raf = 0;
     this.pendingFetch = 0;
-    this.audio.addEventListener('ended', () => { this.playing = false; });
+    // The preview running out is a stop nobody asked for: settle the cursor
+    // at the end, then tell the page so its Play button stops lying.
+    this.audio.addEventListener('ended', () => {
+      this.playing = false;
+      cancelAnimationFrame(this.raf);
+      this.onTick?.(this.position());
+      this.onEnded?.();
+    });
   }
 
   position() {

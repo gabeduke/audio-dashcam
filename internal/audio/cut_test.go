@@ -59,9 +59,17 @@ func TestApplyFadesWorksAcrossBlocks(t *testing.T) {
 func TestCutWritesAFadedRegionAsANewTake(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "jam_src.wav")
+	// A ramp, not a constant: with every frame carrying a different value a
+	// copy that is off by even one frame -- or a fade applied where it should
+	// not be -- changes the sample, which a flat source would hide.
 	data := make([]int32, 48000*2)
 	for i := range data {
-		data[i] = 1 << 20
+		f := int32(i/2) << 10
+		if i%2 == 0 {
+			data[i] = f
+		} else {
+			data[i] = -f
+		}
 	}
 	if _, err := WriteWAV(src, data, 2, []int{0, 1}, 48000); err != nil {
 		t.Fatal(err)
@@ -87,16 +95,39 @@ func TestCutWritesAFadedRegionAsANewTake(t *testing.T) {
 	if err != nil || info.Frames() != 10000 || info.Channels != 2 || info.BitsPerSample != 32 {
 		t.Fatalf("info = %+v err = %v", info, err)
 	}
-	var first, mid, last int32
+	// Output frame i is source frame 10000+i. The fade is 144 frames at each
+	// edge, so frames 144 .. 10000-144-1 must be byte-identical to the source.
+	fade := int(FadeFrames(48000))
+	srcL := func(frame int) int32 { return int32(frame) << 10 }
+	var first, afterFadeIn, mid, midR, beforeFadeOut, last int32
 	_, err = ReadFrames(out, 0, 10000, 10000, func(b []int32, _ int64) error {
-		first, mid, last = b[0], b[5000*2], b[9999*2]
+		first = b[0]
+		afterFadeIn = b[fade*2]
+		mid, midR = b[5000*2], b[5000*2+1]
+		beforeFadeOut = b[(10000-fade-1)*2]
+		last = b[9999*2]
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first != 0 || mid != 1<<20 || last >= 1<<20 || last == 0 {
-		t.Errorf("first=%d mid=%d last=%d: want silence, exact copy, faded tail", first, mid, last)
+	if first != 0 {
+		t.Errorf("first = %d, want silence at the head of the fade-in", first)
+	}
+	if want := srcL(10000 + fade); afterFadeIn != want {
+		t.Errorf("frame %d = %d, want the exact source sample %d", fade, afterFadeIn, want)
+	}
+	if want := srcL(15000); mid != want {
+		t.Errorf("mid = %d, want the exact source sample %d", mid, want)
+	}
+	if want := -srcL(15000); midR != want {
+		t.Errorf("mid right = %d, want %d: channels not kept in step", midR, want)
+	}
+	if want := srcL(10000 + 10000 - fade - 1); beforeFadeOut != want {
+		t.Errorf("frame %d = %d, want the exact source sample %d", 10000-fade-1, beforeFadeOut, want)
+	}
+	if full := srcL(19999); last >= full || last <= 0 {
+		t.Errorf("last = %d, want a faded tail strictly between 0 and %d", last, full)
 	}
 
 	if _, err := os.Stat(peaksPath(out)); err != nil {

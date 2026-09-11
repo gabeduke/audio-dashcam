@@ -5,13 +5,20 @@ import { levelFor, tileSpan, tilesFor, fileLevel, TILE_BUCKETS } from './geometr
 // peaks for whatever tiles it lacks and drawing the coarsest thing it has
 // in the meantime -- ultimately the 1024-bucket file peaks, which are
 // always present. Nothing here touches the DOM.
+// A bare `globalThis.fetch` handed around as a value and then called as
+// `this.fetchFn(url)` throws "Illegal invocation" in browsers -- fetch wants
+// the window as its receiver -- while node's fetch does not care, so this
+// only ever broke the real page. Wrapped, it works in both.
+const defaultFetch = (...args) => globalThis.fetch(...args);
+
 export class TileCache {
-  constructor({ file, totalFrames, filePeaks, fetchFn = globalThis.fetch, onChange, maxTiles = 256 }) {
+  constructor({ file, totalFrames, filePeaks, fetchFn = defaultFetch, onChange, onGone, maxTiles = 256 }) {
     this.file = file;
     this.totalFrames = totalFrames;
     this.filePeaks = filePeaks;
     this.fetchFn = fetchFn;
     this.onChange = onChange;
+    this.onGone = onGone;
     this.maxTiles = maxTiles;
     this.fileLevel = fileLevel(totalFrames);
     this.cache = new Map();     // key -> { pd, used }
@@ -51,7 +58,13 @@ export class TileCache {
     this.inflight.add(k);
     const url = `/api/peaks?file=${encodeURIComponent(this.file)}&from=${from}&to=${to}&buckets=${TILE_BUCKETS}`;
     this.fetchFn(url).then(async (res) => {
-      if (res.status === 404) { this.gone = true; this.stop(); return; }
+      if (res.status === 404) {
+        const first = !this.gone;
+        this.gone = true;
+        this.stop();
+        if (first) this.onGone?.();
+        return;
+      }
       if (!res.ok) throw new Error(`status ${res.status}`);
       const pd = await res.json();
       this.cache.set(k, { pd, used: ++this.tick });
@@ -92,7 +105,15 @@ export class TileCache {
         ? { pd: this.filePeaks, level: this.fileLevel, isFile: true }
         : this.best(level, Math.floor(f0 / tileSpan(level)));
       const pd = src.pd;
-      const bucketFrames = src.isFile ? this.totalFrames / pd.buckets : 2 ** src.level;
+      // A tile's real bucket size comes from the response, not from its
+      // level: RangePeaks uses per = floor((to-from)/buckets), and the last
+      // tile of a take is clamped to totalFrames, so its per is smaller than
+      // 2**level. Deriving it from the payload keeps the tail of the last
+      // tile from rendering as a squeezed copy of its own beginning; the
+      // clamp of b0/b1 below covers the remainder the last bucket absorbs.
+      const bucketFrames = src.isFile
+        ? this.totalFrames / pd.buckets
+        : Math.max(1, Math.floor((pd.duration * pd.sample_rate) / pd.buckets));
       const base = src.isFile ? 0 : pd.from;
       let b0 = Math.floor((f0 - base) / bucketFrames);
       let b1 = Math.ceil((f1 - base) / bucketFrames) - 1;
