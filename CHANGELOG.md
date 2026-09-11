@@ -5,6 +5,35 @@ Releases are cut automatically on every merge to `master`. Versions are dated:
 
 <!-- new releases are inserted directly below this line -->
 
+## v2026.09.11.2 — 2026-09-11
+
+- Rename the default branch to main (c2e71a8)
+- Plan: fix the self-review's helper note (313dc76)
+- Plan: name the real 16-bit test helpers (405e0c8)
+- Plan the waveform page v2 in seven tasks (87995ab)
+- Spec the waveform page v2: drag-select, implicit loop, one-tap share (fe58a84)
+- A pan breaks a double-tap; a slow still press is still a tap (8b27553)
+- Hold to select a region; a plain drag pans again (b953987)
+- Make region selection a deliberate pull, not a wobbly tap (f087006)
+- Let a double-tap inside the region add a flag (b3b302c)
+- Fix the final review's findings on the waveform page v2 (2914401)
+- Share a region as an MP3 through the phone's share sheet (376d3f5)
+- A region always loops, and only the region you settle on (6831b40)
+- Document the waveform page's share flow and gestures (c2b30e0)
+- Waveform page v2 layout: overview, drag-select, implicit loop, fine tune (f40f8cb)
+- Never strand a provisional region when a drag is interrupted (96a79b9)
+- One-finger drag on the waveform selects a region; wheel zooms (05632ec)
+- Stream a region as an MP3 over GET /api/render for sharing (f12e769)
+- Reject regions too short for two fades; clamp RenderArgs fade start at 0 (638c03e)
+- Overview strip with a draggable viewport window (87eb0b2)
+- Render a faded MP3 of a take's frame range through ffmpeg (8f2e74b)
+- Plan: fix the self-review's helper note (f757595)
+- Plan: name the real 16-bit test helpers (830e863)
+- Plan the waveform page v2 in seven tasks (43b4727)
+- Spec the waveform page v2: drag-select, implicit loop, one-tap share (0ebe4f6)
+- Record v2026.09.11.1 in the changelog [skip ci] (5b2099f)
+
+
 ## v2026.09.11.1 — 2026-09-11
 
 - Fix the final review's findings on the waveform page (de85956)
