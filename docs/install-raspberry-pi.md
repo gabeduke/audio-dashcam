@@ -6,7 +6,7 @@
 > what each step does before running it, and expect to fix something.
 >
 > The release workflow is in the same position: it only runs on a merge to
-> `master`, so the first merge is also its first run. Until one has completed
+> `main`, so the first merge is also its first run. Until one has completed
 > there is nothing behind the download URLs below — build from source in the
 > meantime, per [development.md](development.md).
 
@@ -27,7 +27,7 @@
 
 ## Install from a release
 
-Every merge to `master` publishes `hindsight_<version>_linux_arm64.tar.gz` and
+Every merge to `main` publishes `hindsight_<version>_linux_arm64.tar.gz` and
 a `SHA256SUMS` alongside it.
 
 ```bash

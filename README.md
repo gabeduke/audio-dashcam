@@ -50,7 +50,7 @@ mp3 preview to play or draw.
 
 ## Install on a Raspberry Pi
 
-Every merge to `master` publishes an arm64 tarball. Download it, check it,
+Every merge to `main` publishes an arm64 tarball. Download it, check it,
 unpack it, run the installer. (These URLs resolve once the repository is
 renamed to `hindsight`; until then, use the current repository's releases
 page.)

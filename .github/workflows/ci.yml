@@ -3,9 +3,9 @@ name: CI
 on:
   pull_request:
   push:
-    # master is covered by release.yml, which calls this workflow. Without
+    # main is covered by release.yml, which calls this workflow. Without
     # this, every merge would run the suite twice.
-    branches-ignore: [master]
+    branches-ignore: [main]
   workflow_call:
 
 # Called from release.yml, this job would otherwise inherit that workflow's

@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: write
@@ -11,18 +11,18 @@ permissions:
 # release, so queue them rather than cancelling either.
 #
 # Queueing only orders the runs. It does not make the changelog push safe:
-# actions/checkout checks out github.sha, not master's tip, so a run whose
-# master has moved on cannot fast-forward master from where it is standing.
+# actions/checkout checks out github.sha, not main's tip, so a run whose
+# main has moved on cannot fast-forward main from where it is standing.
 # That is handled in "Update the changelog", which re-applies the entry to the
 # real tip and warns rather than fails if the push still loses -- the tag and
 # the GitHub release are pushed before it runs, and cannot be lost by it.
 concurrency:
-  group: release-master
+  group: release-main
   cancel-in-progress: false
 
 jobs:
   test:
-    # Reused rather than duplicated, so a red master cannot publish.
+    # Reused rather than duplicated, so a red main cannot publish.
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     uses: ./.github/workflows/ci.yml
 
@@ -119,9 +119,9 @@ jobs:
       # Best effort, deliberately.
       #
       # The checkout is at github.sha. With merges A then B, run A pushing
-      # HEAD:master from its own checkout is rejected: master is at B, which is
+      # HEAD:main from its own checkout is rejected: main is at B, which is
       # not a descendant of A's changelog commit. So apply the entry to
-      # whatever master is *now* rather than to the commit this run was checked
+      # whatever main is *now* rather than to the commit this run was checked
       # out at. (dist/ is untracked, so the tarball survives the switch, and
       # `commit -am` cannot pick it up.)
       #
@@ -136,7 +136,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git fetch origin master
+          git fetch origin main
           git checkout -B changelog-tmp FETCH_HEAD
 
           # Insert after the marker so the file's header survives.
@@ -158,7 +158,7 @@ jobs:
           # [skip ci] keeps this commit out of this workflow: the `test` job's
           # `if` reads head_commit.message, and `release` needs test.
           git commit -am "Record $TAG in the changelog [skip ci]"
-          git push origin HEAD:master \
+          git push origin HEAD:main \
             || echo "::warning::changelog push failed; $TAG is released, CHANGELOG.md not updated"
 
       - name: Publish

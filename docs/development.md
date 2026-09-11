@@ -129,19 +129,19 @@ The older `DASHCAM_*` spellings of these variables still work, so an existing
 
 ## Releases
 
-Merging to `master` runs the test suite, then builds and publishes:
+Merging to `main` runs the test suite, then builds and publishes:
 
 - a tag `vYYYY.MM.DD.N`, where `N` increments per release that UTC day. It is
   the highest existing suffix plus one, not a count — a deleted tag leaves a
   gap rather than causing a collision
 - `hindsight_<tag>_linux_arm64.tar.gz` and `SHA256SUMS`
-- a `CHANGELOG.md` entry, committed back to `master` with `[skip ci]`
+- a `CHANGELOG.md` entry, committed back to `main` with `[skip ci]`
 
 The binary is built inside a `debian:bookworm` container on an arm64 runner.
 Raspberry Pi OS Bookworm ships glibc 2.36 and Ubuntu 24.04 links 2.39, so a
 binary built on the bare runner would not start on the Pi.
 
-Nothing about this can be rehearsed before it is on `master` — the first merge
+Nothing about this can be rehearsed before it is on `main` — the first merge
 is also the workflow's first run.
 
 ## The Python probes
