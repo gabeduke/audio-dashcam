@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1150,5 +1151,31 @@ func TestCutRefusesWhenDiskIsLow(t *testing.T) {
 	writeRealTake(t, dir, "jam_src.wav", 48000)
 	if w := postJSON(t, r, "/api/cut?file=jam_src.wav", `{"start_frame":0,"end_frame":1000}`); w.Code != http.StatusInsufficientStorage {
 		t.Errorf("status = %d, want 507", w.Code)
+	}
+}
+
+func TestSliceStreamsASixteenBitWAV(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_s.wav", 48000)
+	w := do(t, r, http.MethodGet, "/api/slice?file=jam_s.wav&from=100&to=2100")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "audio/wav" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if cl := w.Header().Get("Content-Length"); cl != strconv.Itoa(44+2000*2*2) {
+		t.Errorf("Content-Length = %q, want %d", cl, 44+2000*2*2)
+	}
+	if w.Body.Len() != 44+2000*2*2 {
+		t.Errorf("body = %d bytes", w.Body.Len())
+	}
+	for _, q := range []string{"from=0&to=0", "from=0&to=48001", "from=0", "from=a&to=10"} {
+		if w := do(t, r, http.MethodGet, "/api/slice?file=jam_s.wav&"+q); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
+	}
+	if w := do(t, r, http.MethodGet, "/api/slice?file=jam_nope.wav&from=0&to=10"); w.Code != http.StatusNotFound {
+		t.Errorf("missing: status = %d, want 404", w.Code)
 	}
 }

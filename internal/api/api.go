@@ -78,6 +78,7 @@ func (a *API) SetupRoutes(r *mux.Router) {
 	r.HandleFunc("/api/peaks", a.handlePeaks).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/envelope", a.handleEnvelope).Methods(http.MethodGet, http.MethodHead)
 	r.HandleFunc("/api/live", a.handleLive).Methods(http.MethodGet)
+	r.HandleFunc("/api/slice", a.handleSlice).Methods(http.MethodGet)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -588,6 +589,46 @@ func (a *API) handleCut(w http.ResponseWriter, r *http.Request) {
 	// response on it, and never fail the cut because of it -- same as Save.
 	go audio.MakePreview(a.cfg, filepath.Join(a.cfg.OutputDir, out), len(a.cfg.OutChannels()))
 	writeJSON(w, http.StatusOK, map[string]string{"name": out})
+}
+
+// handleSlice streams a faded 16-bit WAV of [from, to) for the waveform
+// page's region loop. Content-Length is set from the frame count so the
+// browser can show progress; nothing is buffered server-side.
+func (a *API) handleSlice(w http.ResponseWriter, r *http.Request) {
+	name, err := a.safeTakeName(r.URL.Query().Get("file"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	q := r.URL.Query()
+	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
+	to, err2 := strconv.ParseInt(q.Get("to"), 10, 64)
+	if err1 != nil || err2 != nil || from < 0 || to <= from {
+		writeErr(w, http.StatusBadRequest, "need integer 0 <= from < to")
+		return
+	}
+	path := filepath.Join(a.cfg.OutputDir, name)
+	info, err := audio.ReadWAVInfo(path)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if to > info.Frames() {
+		writeErr(w, http.StatusBadRequest, "range is past the end of the take")
+		return
+	}
+	if to-from > int64(audio.MaxSliceSeconds*info.SampleRate) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("slice longer than %ds", audio.MaxSliceSeconds))
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", strconv.FormatInt(audio.SliceBytes(info, from, to), 10))
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	if err := audio.WriteSlice16(w, path, from, to); err != nil {
+		// Headers are gone; all we can do is log and let the client see a
+		// short body, which decodeAudioData rejects.
+		log.Printf("slice %s: %v", name, err)
+	}
 }
 
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a

@@ -1,6 +1,6 @@
 # HTTP API
 
-Eleven routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
+Twelve routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
 else the server answers is the static UI under `web/static`.
 
 There is **no authentication and no rate limiting**. `DELETE /api/delete`
@@ -22,6 +22,7 @@ internet.
 | `GET /api/download?file=[&dl=1]` | Stream inline, or force a download |
 | `DELETE /api/delete?file=` | Remove a take and its sidecars |
 | `POST /api/cut?file=` | Export a region of a take as a new take, with 3ms declick fades |
+| `GET /api/slice?file=&from=&to=` | A region as a 16-bit WAV with the same fades a cut gets, for auditioning |
 
 `GET` routes also accept `HEAD`, except `/api/live`, which is a WebSocket
 upgrade.
@@ -332,6 +333,18 @@ Response: `200 {"name": "jam_2026-09-10_221441.wav"}`.
 | 400 | Bad `file`, malformed body, inverted or out-of-range frames, or a region shorter than two fades (289 frames at 48kHz) |
 | 404 | No such take |
 | 507 | Below `MIN_FREE_GB` |
+
+## `GET /api/slice?file=&from=&to=`
+
+Streams frames `[from, to)` as a complete **16-bit** PCM WAV with the same
+3ms fades `POST /api/cut` applies, so what the waveform page loops is exactly
+what a cut will produce. 16-bit because browsers cannot reliably decode
+32-bit integer WAV. Capped at 60 seconds. `Content-Length` is exact.
+
+| Status | When |
+|---|---|
+| 400 | Bad `file`, non-integer or inverted frames, past the end, or over 60s |
+| 404 | No such take |
 
 ## `DELETE /api/delete?file=`
 
