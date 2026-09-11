@@ -82,3 +82,57 @@ test('a tap on a handle neither seeks nor flags', () => {
   v.up({ pointerId: 1 });
   assert.deepEqual(log, []);
 });
+
+// A select gesture that crossed TAP_MOVE but never reached SELECT_MOVE never
+// set g.selecting, so release still falls through to a tap: a wobbly thumb
+// still seeks instead of leaving a stray region behind.
+test('a select gesture that wobbles under SELECT_MOVE still seeks as a tap', () => {
+  const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
+  v.total = 100000;
+  v.minLen = 289;
+  v.pointers = new Map();
+  v.lastTap = null;
+  v.getState = () => ({ region: null, flags: [], grid: noGrid, cursor: 0 });
+  const log = [];
+  v.emit = (ev, p) => log.push([ev, p]);
+  v.pt = () => ({ x: 210, y: 50 }); // 10px from x0: past TAP_MOVE, under SELECT_MOVE
+
+  v.gesture = { kind: 'select', anchor: 2000, prev: null, x0: 200, y0: 50, t0: performance.now(), moved: true, selecting: false };
+  v.up({ pointerId: 1 });
+  assert.deepEqual(log, [['seek', { frame: 2100 }]]);
+});
+
+// Once selecting latches true, a release that snaps back below MIN_REGION_PX
+// / minLen must roll back to prev and must never emit a tap on top of it.
+test('a select gesture past SELECT_MOVE but under the region minimum rolls back', () => {
+  const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
+  v.total = 100000;
+  v.minLen = 289;
+  v.pointers = new Map();
+  v.lastTap = null;
+  v.getState = () => ({ region: null, flags: [], grid: noGrid, cursor: 0 });
+  const log = [];
+  v.emit = (ev, p) => log.push([ev, p]);
+  v.pt = () => ({ x: 210, y: 50 }); // anchor 2000 -> release frame 2100: 10px, 100 frames
+
+  v.gesture = { kind: 'select', anchor: 2000, prev: null, x0: 200, y0: 50, t0: performance.now(), moved: true, selecting: true };
+  v.up({ pointerId: 1 });
+  assert.deepEqual(log, [['regionChange', { region: null, final: true }]]);
+});
+
+// A deliberate pull past both thresholds commits the region.
+test('a select gesture past SELECT_MOVE and the region minimum commits', () => {
+  const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
+  v.total = 100000;
+  v.minLen = 289;
+  v.pointers = new Map();
+  v.lastTap = null;
+  v.getState = () => ({ region: null, flags: [], grid: noGrid, cursor: 0 });
+  const log = [];
+  v.emit = (ev, p) => log.push([ev, p]);
+  v.pt = () => ({ x: 240, y: 50 }); // anchor 2000 -> release frame 2400: 40px, 400 frames
+
+  v.gesture = { kind: 'select', anchor: 2000, prev: null, x0: 200, y0: 50, t0: performance.now(), moved: true, selecting: true };
+  v.up({ pointerId: 1 });
+  assert.deepEqual(log, [['regionChange', { region: { start: 2000, end: 2400 }, final: true }]]);
+});

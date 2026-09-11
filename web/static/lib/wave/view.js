@@ -8,12 +8,21 @@ import { frameToX, xToFrame, gridLines, clampRegion } from './geometry.js';
 const HANDLE_HIT = 24;   // CSS px each side of a handle
 const FLAG_HIT = 12;
 const TAP_MOVE = 8;
+// A thumb on a couch does not hold still: a plain tap that wobbles must not
+// turn into a region. Selecting only starts once the drag has pulled this
+// far past TAP_MOVE, and only a visible band survives release (MIN_REGION_PX
+// below) -- selection has to be a deliberate pull, not a twitch.
+const SELECT_MOVE = 14; // CSS px
 const TAP_MS = 300;
 const MIN_FPP = 1 / 8;   // 8 px per frame: far enough
 const CHIP_H = 16;
 const DOWNBEAT_HIT_H = 24; // the downbeat is only grabbable in the top strip
 const DOUBLE_TAP_MOVE = 20;
 const MIN_PINCH = 8;       // below this the ratio g.dist/dist goes wild
+// this.minLen alone (a few ms) is invisible at most zoom levels: a region
+// also has to span this many screen pixels to survive release, so a sliver
+// wobble reads as a tap, not a selection.
+const MIN_REGION_PX = 24;
 
 // True separation of two fingers, floored so a near-vertical pinch cannot
 // divide by ~0 and fling the zoom.
@@ -243,7 +252,8 @@ export class WaveView {
       // overview strip and in the two-finger gesture, so the one gesture a
       // thumb reaches for on the couch makes the thing you want to share.
       // prev is the region the drag started from: a sliver release restores it.
-      default: this.gesture = { ...base, kind: 'select', anchor: xToFrame(p.x, this.view), prev: st.region ? { ...st.region } : null };
+      // selecting flips true only once the drag clears SELECT_MOVE -- see move().
+      default: this.gesture = { ...base, kind: 'select', anchor: xToFrame(p.x, this.view), prev: st.region ? { ...st.region } : null, selecting: false };
     }
     // Handles, the downbeat and flags break a double-tap pair; bare waveform
     // and the region body do not, so a tap-then-flag-tap never lands an
@@ -272,12 +282,19 @@ export class WaveView {
     if (Math.abs(dx) > TAP_MOVE || Math.abs(p.y - g.y0) > TAP_MOVE) g.moved = true;
     switch (g.kind) {
       case 'select': {
-        if (!g.moved) break;
+        // Selecting is a deliberate pull, not a wobble: nothing is emitted
+        // until the drag clears SELECT_MOVE, which is well past a tap's
+        // TAP_MOVE jitter. Once it does, selecting latches true for the rest
+        // of the gesture -- see up() and rollback() for what that gates.
+        if (!g.selecting) {
+          if (Math.abs(p.x - g.x0) < SELECT_MOVE) break;
+          g.selecting = true;
+        }
         const cur = xToFrame(p.x, this.view);
         const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
         // The provisional clamp allows a region shorter than minLen while the
         // finger is still moving, so the band tracks the finger from the moment
-        // the drag clears TAP_MOVE; the minimum is enforced only on release.
+        // selecting starts; the minimum is enforced only on release.
         this.emit('regionChange', { region: clampRegion(r, this.total, Math.max(1, Math.min(this.minLen, r.end - r.start))), final: false });
         this.draw(); break;
       }
@@ -328,20 +345,29 @@ export class WaveView {
         // so double-tapping a flag cannot stack a second flag on top of it.
         if (isTap) this.emit('selectFlag', { flag: g.flag });
         break;
-      case 'select':
-        if (g.moved) {
+      case 'select': {
+        const cur = xToFrame(p.x, this.view);
+        const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
+        // A thumb on a couch does not hold still: minLen alone (a few ms) is
+        // invisible at most zooms, so a release only counts as a selection
+        // once it cleared the deliberate-pull threshold in move() AND left a
+        // visible band on screen.
+        const bigEnough = r.end - r.start >= this.minLen && (r.end - r.start) / this.view.fpp >= MIN_REGION_PX;
+        if (g.selecting && bigEnough) {
           // A drag is never half of a double-tap, or tap-drag-tap flags.
           this.lastTap = null;
-          const cur = xToFrame(p.x, this.view);
-          const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
-          if (r.end - r.start >= this.minLen) this.emit('regionChange', { region: clampRegion(r, this.total, this.minLen), final: true });
-          // A sliver: discard it and put back whatever region the drag began
+          this.emit('regionChange', { region: clampRegion(r, this.total, this.minLen), final: true });
+        } else if (g.selecting) {
+          // Crossed the pull threshold but pulled back below it, or below
+          // minLen: discard it and put back whatever region the drag began
           // from, so a twitchy tap-drag does not destroy the take.
-          else this.emit('regionChange', { region: g.prev, final: true });
-        } else if (isTap) {
+          this.emit('regionChange', { region: g.prev, final: true });
+        } else if (Math.abs(p.x - g.x0) < SELECT_MOVE && performance.now() - g.t0 < TAP_MS) {
+          // Never reached selecting: a wobbly tap still seeks.
           this.tapOnWave(p);
         }
         break;
+      }
     }
   }
 
@@ -372,15 +398,17 @@ export class WaveView {
   }
 
   // Undo a drag that will never get a release, by re-emitting the snapshot
-  // taken at pointerdown as the final value. A drag that never moved emitted
-  // nothing, so there is nothing to undo.
+  // taken at pointerdown as the final value. A drag that never moved (or,
+  // for select, never crossed the deliberate-pull threshold) emitted
+  // nothing, so there is nothing to undo -- a sub-threshold press interrupted
+  // by a second finger must emit nothing.
   rollback(g) {
-    if (!g || !g.moved) return;
+    if (!g) return;
     switch (g.kind) {
-      case 'select': this.emit('regionChange', { region: g.prev, final: true }); break;
+      case 'select': if (g.selecting) this.emit('regionChange', { region: g.prev, final: true }); break;
       case 'handle':
-      case 'moveRegion': this.emit('regionChange', { region: g.region, final: true }); break;
-      case 'downbeat': this.emit('downbeatChange', { frame: g.prev, final: true }); break;
+      case 'moveRegion': if (g.moved) this.emit('regionChange', { region: g.region, final: true }); break;
+      case 'downbeat': if (g.moved) this.emit('downbeatChange', { frame: g.prev, final: true }); break;
       default: break;
     }
   }
