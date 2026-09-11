@@ -44,3 +44,41 @@ test('a middling region scales the grab to a quarter of its width', () => {
   assert.deepEqual(v.hit(150, 100, st), { kind: 'handle', edge: 'end' });
   assert.deepEqual(v.hit(151, 100, st), { kind: 'wave' });
 });
+
+// up() drives the tap/double-tap machinery end to end, so these exercise it
+// on a stubbed instance rather than hit() alone.
+test('a double-tap inside the region adds a flag, same as bare waveform', () => {
+  const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
+  v.total = 100000;
+  v.minLen = 289;
+  v.pointers = new Map();
+  v.lastTap = null;
+  v.getState = () => ({ region: { start: 1000, end: 3000 }, flags: [], grid: noGrid, cursor: 0 });
+  const log = [];
+  v.emit = (ev, p) => log.push([ev, p]);
+  v.pt = () => ({ x: 200, y: 50 }); // inside the region
+
+  v.gesture = { kind: 'moveRegion', region: { start: 1000, end: 3000 }, x0: 200, y0: 50, t0: performance.now(), moved: false };
+  v.up({ pointerId: 1 });
+  assert.deepEqual(log.at(-1), ['seek', { frame: 2000 }]);
+
+  v.gesture = { kind: 'moveRegion', region: { start: 1000, end: 3000 }, x0: 200, y0: 50, t0: performance.now(), moved: false };
+  v.up({ pointerId: 1 });
+  assert.deepEqual(log.at(-1), ['addFlag', { frame: 2000 }]);
+});
+
+test('a tap on a handle neither seeks nor flags', () => {
+  const v = stubView({ start: 0, fpp: 10, width: 390 });
+  v.total = 100000;
+  v.minLen = 289;
+  v.pointers = new Map();
+  v.lastTap = null;
+  v.getState = () => ({ region: { start: 1000, end: 3000 }, flags: [], grid: noGrid, cursor: 0 });
+  const log = [];
+  v.emit = (ev, p) => log.push([ev, p]);
+  v.pt = () => ({ x: 100, y: 50 });
+
+  v.gesture = { kind: 'handle', edge: 'start', region: { start: 1000, end: 3000 }, grabOffset: 0, x0: 100, y0: 50, t0: performance.now(), moved: false };
+  v.up({ pointerId: 1 });
+  assert.deepEqual(log, []);
+});

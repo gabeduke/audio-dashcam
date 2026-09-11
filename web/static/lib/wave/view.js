@@ -245,9 +245,10 @@ export class WaveView {
       // prev is the region the drag started from: a sliver release restores it.
       default: this.gesture = { ...base, kind: 'select', anchor: xToFrame(p.x, this.view), prev: st.region ? { ...st.region } : null };
     }
-    // Only a bare-wave tap can be half of a double-tap; anything else breaks
-    // the pair so a tap-then-flag-tap never lands an unwanted flag.
-    if (h.kind !== 'wave') this.lastTap = null;
+    // Handles, the downbeat and flags break a double-tap pair; bare waveform
+    // and the region body do not, so a tap-then-flag-tap never lands an
+    // unwanted flag but a moment can still be flagged wherever it sits.
+    if (h.kind !== 'wave' && h.kind !== 'region') this.lastTap = null;
   }
 
   move(e) {
@@ -317,7 +318,7 @@ export class WaveView {
       case 'handle':
       case 'moveRegion':
         if (g.moved) this.emit('regionChange', { region: st.region, final: true });
-        else if (g.kind === 'moveRegion' && isTap) this.emit('seek', { frame: xToFrame(p.x, this.view) });
+        else if (g.kind === 'moveRegion' && isTap) this.tapOnWave(p);
         break;
       case 'downbeat':
         if (g.moved) this.emit('downbeatChange', { frame: st.grid.downbeat, final: true });
@@ -338,16 +339,23 @@ export class WaveView {
           // from, so a twitchy tap-drag does not destroy the take.
           else this.emit('regionChange', { region: g.prev, final: true });
         } else if (isTap) {
-          const now = performance.now();
-          if (this.lastTap && now - this.lastTap.t < TAP_MS && Math.hypot(p.x - this.lastTap.x, p.y - this.lastTap.y) < DOUBLE_TAP_MOVE) {
-            this.lastTap = null;
-            this.emit('addFlag', { frame: xToFrame(p.x, this.view) });
-          } else {
-            this.lastTap = { t: now, x: p.x, y: p.y };
-            this.emit('seek', { frame: xToFrame(p.x, this.view) });
-          }
+          this.tapOnWave(p);
         }
         break;
+    }
+  }
+
+  // A tap seeks; two taps within TAP_MS and DOUBLE_TAP_MOVE add a flag. Shared
+  // by bare-waveform taps and taps inside the region, so a moment can be
+  // flagged wherever it sits.
+  tapOnWave(p) {
+    const now = performance.now();
+    if (this.lastTap && now - this.lastTap.t < TAP_MS && Math.hypot(p.x - this.lastTap.x, p.y - this.lastTap.y) < DOUBLE_TAP_MOVE) {
+      this.lastTap = null;
+      this.emit('addFlag', { frame: xToFrame(p.x, this.view) });
+    } else {
+      this.lastTap = { t: now, x: p.x, y: p.y };
+      this.emit('seek', { frame: xToFrame(p.x, this.view) });
     }
   }
 
