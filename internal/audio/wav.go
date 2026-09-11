@@ -20,6 +20,9 @@ type PeakData struct {
 	SampleRate int     `json:"sample_rate"`
 	Duration   float64 `json:"duration"`
 	Buckets    int     `json:"buckets"`
+	// From is the first frame the buckets describe. Zero for the whole-take
+	// file; set by RangePeaks.
+	From int64 `json:"from"`
 	// Data holds one array per channel of alternating min,max pairs in -1..1.
 	Data [][]float32 `json:"data"`
 }
