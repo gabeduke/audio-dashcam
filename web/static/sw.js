@@ -10,7 +10,7 @@
 // Renamed from 'dashcam-shell-v3' along with the product: this deliberately
 // invalidates the old cache, so a phone with the old app shell installed
 // fetches the new one rather than keep serving a UI branded with the old name.
-const CACHE = 'hindsight-shell-v3';
+const CACHE = 'hindsight-shell-v4';
 const SHELL = [
   '/',
   '/index.html',
@@ -25,8 +25,10 @@ const SHELL = [
   '/lib/wave/geometry.js',
   '/lib/wave/tiles.js',
   '/lib/wave/view.js',
+  '/lib/wave/overview.js',
   '/lib/wave/clock.js',
   '/lib/wave/page.js',
+  '/lib/wave/share.js',
   '/vendor/wavesurfer.esm.js',
   '/manifest.json',
   '/icons/icon-192.png',

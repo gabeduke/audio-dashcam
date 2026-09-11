@@ -796,16 +796,51 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
 .wave-title { display: flex; flex-direction: column; min-width: 0; }
 .wave-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wave-bpm { font-size: 12px; color: var(--ink-dim); }
-.wave-main { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+/* align-items is spelled out because the takes page's two-column rule at
+   >=860px sets `main { display: grid; align-items: start }` unscoped; this
+   block wins back `display`, but not the alignment, and start would shrink the
+   action row and the Fine tune box to their content instead of the page. */
+.wave-main { padding: 8px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.overview-canvas {
+  width: 100%; height: 36px; display: block;
+  border-radius: 8px; background: var(--panel-2);
+  touch-action: none;
+}
 .wave-canvas {
-  width: 100%; height: 40vh; min-height: 180px;
+  width: 100%; height: 36vh; min-height: 160px;
   border-radius: var(--radius); background: var(--panel);
   touch-action: none; display: block;
 }
 .wave-error { padding: 24px; color: var(--danger); }
 .wave-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.wave-row .readout { margin-left: auto; color: var(--ink-dim); font-size: 13px; }
-.wave-row .edge { display: inline-flex; align-items: center; gap: 4px; }
+/* Unscoped: .edge now groups the nudges inside .fine-grid as well as in a
+   .wave-row. */
+.edge { display: inline-flex; align-items: center; gap: 4px; }
+.wave-row.action { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.wave-row.action .region-text {
+  flex: 1; min-width: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  font-size: 14px; color: var(--ink-dim);
+}
+.region-text .mono { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.region-x {
+  appearance: none; border: 1px solid var(--line); border-radius: 50%;
+  width: 28px; height: 28px; background: var(--panel); color: var(--danger);
+  font-size: 16px; line-height: 1; cursor: pointer;
+}
+.fine { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
+.fine > summary { cursor: pointer; color: var(--ink-dim); font-size: 13px; padding: 6px 0; list-style: none; }
+.fine > summary::-webkit-details-marker { display: none; }
+.fine > summary::before { content: '▸ '; }
+.fine[open] > summary::before { content: '▾ '; }
+.fine-grid { display: grid; grid-template-columns: 78px 1fr; gap: 8px 10px; align-items: center; padding: 6px 0 4px; }
+.fine-label { color: var(--ink-dim); font-size: 13px; }
+.fine-hint { color: var(--ink-faint); font-size: 12px; }
+.fine-grid .readout { color: var(--ink-dim); font-size: 13px; }
+/* .icon-btn.danger carries margin-left:auto for the flag sheet; in the fine
+   grid the two buttons sit side by side instead. */
+.fine-grid .icon-btn.danger { margin-left: 0; }
+.linkish { appearance: none; background: none; border: none; color: var(--accent); font: inherit; cursor: pointer; padding: 0; }
 .mono { font-family: var(--mono); }
 .nudge {
   appearance: none; min-width: var(--tap); min-height: 40px;
@@ -830,5 +865,5 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
   background: var(--panel); color: var(--ink); font-family: var(--font); font-size: 15px;
 }
 @media (min-width: 900px) {
-  .wave-canvas { height: 60vh; }
+  .wave-canvas { height: 55vh; }
 }
