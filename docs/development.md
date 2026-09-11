@@ -79,11 +79,14 @@ touching `view.js`, `overview.js`, `share.js` or `page.js`, check by hand:
 
 - **Overview strip** — drag it to pan the main waveform, tap to jump, double-tap
   to fit the whole take
-- **Drag-select** — one-finger drag on the main waveform draws a region
+- **Pan** — one-finger drag on the main waveform slides the view under the
+  finger; pinch zooms
+- **Hold-select** — press and hold on the main waveform for ~350ms until a band
+  appears under the finger, then drag to draw a region
 - **Implicit loop** — playback loops the region with no Loop toggle to find;
   clearing the region returns to plain playback from the cursor
 - **Fine tune** — the disclosure's Start/End nudges, the readout, downbeat
-  reset, Export as take and Delete region all move the same region the drag
+  reset, Export as take and Delete region all move the same region the hold
   drew
 - **Share on a phone** — over `tailscale serve` (HTTPS), the button opens the
   share sheet with the rendered MP3; over plain HTTP it falls back to

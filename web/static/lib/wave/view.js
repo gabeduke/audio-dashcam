@@ -8,11 +8,12 @@ import { frameToX, xToFrame, gridLines, clampRegion } from './geometry.js';
 const HANDLE_HIT = 24;   // CSS px each side of a handle
 const FLAG_HIT = 12;
 const TAP_MOVE = 8;
-// A thumb on a couch does not hold still: a plain tap that wobbles must not
-// turn into a region. Selecting only starts once the drag has pulled this
-// far past TAP_MOVE, and only a visible band survives release (MIN_REGION_PX
-// below) -- selection has to be a deliberate pull, not a twitch.
-const SELECT_MOVE = 14; // CSS px
+// A plain one-finger drag pans -- the gesture a waveform invites, and the one
+// a thumb produces by accident. Selecting is the deliberate gesture: hold the
+// press still for HOLD_MS and it becomes a region drag, announced by a band
+// under the finger. Move past TAP_MOVE before the hold fires and the press has
+// already committed to panning, so a hair trigger cannot cost you the region.
+export const HOLD_MS = 350; // ms; exported so the tests can tick exactly this far
 const TAP_MS = 300;
 const MIN_FPP = 1 / 8;   // 8 px per frame: far enough
 const CHIP_H = 16;
@@ -20,8 +21,8 @@ const DOWNBEAT_HIT_H = 24; // the downbeat is only grabbable in the top strip
 const DOUBLE_TAP_MOVE = 20;
 const MIN_PINCH = 8;       // below this the ratio g.dist/dist goes wild
 // this.minLen alone (a few ms) is invisible at most zoom levels: a region
-// also has to span this many screen pixels to survive release, so a sliver
-// wobble reads as a tap, not a selection.
+// also has to span this many screen pixels to survive release, so a hold that
+// barely moved puts the old region back instead of leaving a sliver.
 const MIN_REGION_PX = 24;
 
 // True separation of two fingers, floored so a near-vertical pinch cannot
@@ -66,6 +67,8 @@ export class WaveView {
 
   destroy() {
     this.destroyed = true;
+    // A pending hold would otherwise fire into a torn-down view.
+    this.clearHold(this.gesture);
     this.ro.disconnect();
     this.ac.abort();
     cancelAnimationFrame(this.raf);
@@ -206,7 +209,7 @@ export class WaveView {
       const x0 = frameToX(st.region.start, this.view), x1 = frameToX(st.region.end, this.view);
       // A saved region seen from far out can be a few pixels wide, and two
       // full-size handle zones around it would swallow everything nearby:
-      // there would be nowhere left to start a fresh drag-select. Shrink the
+      // there would be nowhere left to start a fresh press-and-hold. Shrink the
       // grab with the region (never below 6px) so a tiny region stays
       // draggable by its edges without owning the screen around it.
       const grab = x1 - x0 >= 2 * HANDLE_HIT ? HANDLE_HIT : Math.max(6, (x1 - x0) / 4);
@@ -248,18 +251,36 @@ export class WaveView {
       case 'region': this.gesture = { ...base, kind: 'moveRegion', region: { ...st.region } }; break;
       case 'downbeat': this.gesture = { ...base, kind: 'downbeat', prev: st.grid.downbeat, grabOffset: p.x - frameToX(st.grid.downbeat, this.view) }; break;
       case 'flag': this.gesture = { ...base, kind: 'flag', flag: h.flag }; break;
-      // A one-finger drag on bare waveform selects. Panning lives on the
-      // overview strip and in the two-finger gesture, so the one gesture a
-      // thumb reaches for on the couch makes the thing you want to share.
-      // prev is the region the drag started from: a sliver release restores it.
-      // selecting flips true only once the drag clears SELECT_MOVE -- see move().
-      default: this.gesture = { ...base, kind: 'select', anchor: xToFrame(p.x, this.view), prev: st.region ? { ...st.region } : null, selecting: false };
+      // A press on bare waveform is undecided: it pans if it moves first and
+      // selects if it holds still for HOLD_MS (see beginSelect). start is the
+      // viewport to pan from, prev the region a select would restore on a
+      // sliver release, and selecting flips true only in beginSelect().
+      default: {
+        const g = { ...base, kind: 'select', anchor: xToFrame(p.x, this.view), prev: st.region ? { ...st.region } : null, selecting: false, start: this.view.start, holdTimer: null };
+        g.holdTimer = setTimeout(() => this.beginSelect(g), HOLD_MS);
+        this.gesture = g;
+      }
     }
     // Handles, the downbeat and flags break a double-tap pair; bare waveform
     // and the region body do not, so a tap-then-flag-tap never lands an
     // unwanted flag but a moment can still be flagged wherever it sits.
     if (h.kind !== 'wave' && h.kind !== 'region') this.lastTap = null;
   }
+
+  // The hold fired: the press becomes a region drag. Guarded because the timer
+  // outlives the gesture -- a second finger, a cancel or a release may have
+  // replaced it, and a press that already moved has chosen panning instead.
+  // The immediate provisional region is the cue: a minLen band appears under
+  // the finger, so the hold is visible rather than a secret.
+  beginSelect(g) {
+    if (this.gesture !== g || g.moved) return;
+    g.holdTimer = null;
+    g.selecting = true;
+    this.emit('regionChange', { region: clampRegion({ start: g.anchor, end: g.anchor + this.minLen }, this.total, this.minLen), final: false });
+    this.draw();
+  }
+
+  clearHold(g) { if (g && g.holdTimer) { clearTimeout(g.holdTimer); g.holdTimer = null; } }
 
   move(e) {
     if (!this.pointers.has(e.pointerId)) return;
@@ -282,21 +303,22 @@ export class WaveView {
     if (Math.abs(dx) > TAP_MOVE || Math.abs(p.y - g.y0) > TAP_MOVE) g.moved = true;
     switch (g.kind) {
       case 'select': {
-        // Selecting is a deliberate pull, not a wobble: nothing is emitted
-        // until the drag clears SELECT_MOVE, which is well past a tap's
-        // TAP_MOVE jitter. Once it does, selecting latches true for the rest
-        // of the gesture -- see up() and rollback() for what that gates.
-        if (!g.selecting) {
-          if (Math.abs(p.x - g.x0) < SELECT_MOVE) break;
-          g.selecting = true;
+        if (g.selecting) {
+          const cur = xToFrame(p.x, this.view);
+          const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
+          // The provisional clamp allows a region shorter than minLen while the
+          // finger is still moving, so the band tracks the finger from the
+          // moment the hold fired; the minimum is enforced only on release.
+          this.emit('regionChange', { region: clampRegion(r, this.total, Math.max(1, Math.min(this.minLen, r.end - r.start))), final: false });
+          this.draw();
+        } else if (g.moved) {
+          // Moved before the hold fired: this press is a pan, and it stays one
+          // for the rest of the gesture -- killing the timer is what decides.
+          this.clearHold(g);
+          this.view.start = g.start - dx * this.view.fpp;
+          this.clampView(); this.changed();
         }
-        const cur = xToFrame(p.x, this.view);
-        const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
-        // The provisional clamp allows a region shorter than minLen while the
-        // finger is still moving, so the band tracks the finger from the moment
-        // selecting starts; the minimum is enforced only on release.
-        this.emit('regionChange', { region: clampRegion(r, this.total, Math.max(1, Math.min(this.minLen, r.end - r.start))), final: false });
-        this.draw(); break;
+        break;
       }
       case 'handle': {
         const f = xToFrame(p.x - g.grabOffset, this.view);
@@ -334,7 +356,9 @@ export class WaveView {
     switch (g.kind) {
       case 'handle':
       case 'moveRegion':
-        if (g.moved) this.emit('regionChange', { region: st.region, final: true });
+        // A region drag is never half of a double-tap, exactly as a select
+        // drag is not: drag-then-tap must not land a stray flag.
+        if (g.moved) { this.lastTap = null; this.emit('regionChange', { region: st.region, final: true }); }
         else if (g.kind === 'moveRegion' && isTap) this.tapOnWave(p);
         break;
       case 'downbeat':
@@ -346,24 +370,27 @@ export class WaveView {
         if (isTap) this.emit('selectFlag', { flag: g.flag });
         break;
       case 'select': {
-        const cur = xToFrame(p.x, this.view);
-        const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
-        // A thumb on a couch does not hold still: minLen alone (a few ms) is
-        // invisible at most zooms, so a release only counts as a selection
-        // once it cleared the deliberate-pull threshold in move() AND left a
-        // visible band on screen.
-        const bigEnough = r.end - r.start >= this.minLen && (r.end - r.start) / this.view.fpp >= MIN_REGION_PX;
-        if (g.selecting && bigEnough) {
-          // A drag is never half of a double-tap, or tap-drag-tap flags.
-          this.lastTap = null;
-          this.emit('regionChange', { region: clampRegion(r, this.total, this.minLen), final: true });
-        } else if (g.selecting) {
-          // Crossed the pull threshold but pulled back below it, or below
-          // minLen: discard it and put back whatever region the drag began
-          // from, so a twitchy tap-drag does not destroy the take.
-          this.emit('regionChange', { region: g.prev, final: true });
-        } else if (Math.abs(p.x - g.x0) < SELECT_MOVE && performance.now() - g.t0 < TAP_MS) {
-          // Never reached selecting: a wobbly tap still seeks.
+        // Released before the hold could fire: nothing else will, so drop it.
+        this.clearHold(g);
+        if (g.selecting) {
+          const cur = xToFrame(p.x, this.view);
+          const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
+          // minLen alone (a few ms) is invisible at most zooms, so a held
+          // select only commits if it left a visible band on screen.
+          const bigEnough = r.end - r.start >= this.minLen && (r.end - r.start) / this.view.fpp >= MIN_REGION_PX;
+          if (bigEnough) {
+            // A drag is never half of a double-tap, or tap-drag-tap flags.
+            this.lastTap = null;
+            this.emit('regionChange', { region: clampRegion(r, this.total, this.minLen), final: true });
+          } else {
+            // Held, then barely moved (or pulled back): discard the band and
+            // put back whatever region the press began from, so a hold that
+            // changed its mind does not destroy the take.
+            this.emit('regionChange', { region: g.prev, final: true });
+          }
+        } else if (isTap) {
+          // Never held and never travelled: a tap seeks, two flag. A press
+          // that panned has g.moved set and ends silently.
           this.tapOnWave(p);
         }
         break;
@@ -398,12 +425,14 @@ export class WaveView {
   }
 
   // Undo a drag that will never get a release, by re-emitting the snapshot
-  // taken at pointerdown as the final value. A drag that never moved (or,
-  // for select, never crossed the deliberate-pull threshold) emitted
-  // nothing, so there is nothing to undo -- a sub-threshold press interrupted
-  // by a second finger must emit nothing.
+  // taken at pointerdown as the final value. A drag that never moved (or, for
+  // select, whose hold never fired) emitted nothing, so there is nothing to
+  // undo -- a sub-threshold press interrupted by a second finger must emit
+  // nothing. Clearing the hold first is what stops a pinch from sprouting a
+  // region 350ms in.
   rollback(g) {
     if (!g) return;
+    this.clearHold(g);
     switch (g.kind) {
       case 'select': if (g.selecting) this.emit('regionChange', { region: g.prev, final: true }); break;
       case 'handle':

@@ -12,7 +12,7 @@ It exists because the take you want is the one you already played.
 
 ## Features
 
-- **Waveform page** — open any take to zoom and scrub it, drag out a region, hear it loop, flag moments, share the region as an MP3 from your phone, or export it as a new take with declick fades.
+- **Waveform page** — open any take to zoom and scrub it, drag to pan, press and hold then drag to mark out a region, hear it loop, flag moments, share the region as an MP3 from your phone, or export it as a new take with declick fades.
 
 ## Try it
 

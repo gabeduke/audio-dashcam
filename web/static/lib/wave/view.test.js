@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { WaveView } from './view.js';
+import { WaveView, HOLD_MS } from './view.js';
 
 // hit() reads only this.view, this.chipRects and the state it is handed, so a
 // stubbed instance tests it without a canvas.
@@ -26,7 +26,7 @@ test('a region only a few pixels wide shrinks its handle zones', () => {
   // Zoomed out hard: a 400-frame region is 4px on screen.
   const v = stubView({ start: 0, fpp: 100, width: 400 });
   const st = { grid: noGrid, region: { start: 10000, end: 10400 }, flags: [] }; // x 100..104
-  // The floor is 6px, not the full 24: there is room to drag-select nearby.
+  // The floor is 6px, not the full 24: there is room to press-and-hold nearby.
   assert.deepEqual(v.hit(106, 100, st), { kind: 'handle', edge: 'start' });
   assert.deepEqual(v.hit(115, 100, st), { kind: 'wave' });
   assert.deepEqual(v.hit(85, 100, st), { kind: 'wave' });
@@ -83,10 +83,10 @@ test('a tap on a handle neither seeks nor flags', () => {
   assert.deepEqual(log, []);
 });
 
-// A select gesture that crossed TAP_MOVE but never reached SELECT_MOVE never
-// set g.selecting, so release still falls through to a tap: a wobbly thumb
-// still seeks instead of leaving a stray region behind.
-test('a select gesture that wobbles under SELECT_MOVE still seeks as a tap', () => {
+// A press that travelled past TAP_MOVE before the hold fired became a pan.
+// Releasing it must do nothing at all: no region, and no stray seek that would
+// yank the cursor to wherever the pan happened to end.
+test('a press that panned emits nothing on release', () => {
   const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
   v.total = 100000;
   v.minLen = 289;
@@ -95,16 +95,16 @@ test('a select gesture that wobbles under SELECT_MOVE still seeks as a tap', () 
   v.getState = () => ({ region: null, flags: [], grid: noGrid, cursor: 0 });
   const log = [];
   v.emit = (ev, p) => log.push([ev, p]);
-  v.pt = () => ({ x: 210, y: 50 }); // 10px from x0: past TAP_MOVE, under SELECT_MOVE
+  v.pt = () => ({ x: 210, y: 50 }); // 10px from x0: past TAP_MOVE
 
-  v.gesture = { kind: 'select', anchor: 2000, prev: null, x0: 200, y0: 50, t0: performance.now(), moved: true, selecting: false };
+  v.gesture = { kind: 'select', anchor: 2000, prev: null, x0: 200, y0: 50, t0: performance.now(), moved: true, selecting: false, start: 0 };
   v.up({ pointerId: 1 });
-  assert.deepEqual(log, [['seek', { frame: 2100 }]]);
+  assert.deepEqual(log, []);
 });
 
-// Once selecting latches true, a release that snaps back below MIN_REGION_PX
-// / minLen must roll back to prev and must never emit a tap on top of it.
-test('a select gesture past SELECT_MOVE but under the region minimum rolls back', () => {
+// Once the hold has armed selecting, a release that snaps back below
+// MIN_REGION_PX / minLen must roll back to prev and never emit a tap on top.
+test('a held select released under the region minimum rolls back', () => {
   const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
   v.total = 100000;
   v.minLen = 289;
@@ -120,8 +120,8 @@ test('a select gesture past SELECT_MOVE but under the region minimum rolls back'
   assert.deepEqual(log, [['regionChange', { region: null, final: true }]]);
 });
 
-// A deliberate pull past both thresholds commits the region.
-test('a select gesture past SELECT_MOVE and the region minimum commits', () => {
+// A held select dragged past the region minimum commits.
+test('a held select past the region minimum commits', () => {
   const v = stubView({ start: 0, fpp: 10, width: 390 }); // x=200 -> frame 2000
   v.total = 100000;
   v.minLen = 289;
@@ -135,4 +135,90 @@ test('a select gesture past SELECT_MOVE and the region minimum commits', () => {
   v.gesture = { kind: 'select', anchor: 2000, prev: null, x0: 200, y0: 50, t0: performance.now(), moved: true, selecting: true };
   v.up({ pointerId: 1 });
   assert.deepEqual(log, [['regionChange', { region: { start: 2000, end: 2400 }, final: true }]]);
+});
+
+
+// --- the hold-to-select gesture, driven end to end -------------------------
+// These drive down/move/up with fake pointer events instead of planting a
+// gesture, because the whole point of the change is *when* the gesture becomes
+// a select: that lives in the hold timer, not in up().
+function pointerView({ region = null, start = 5000 } = {}) {
+  const v = Object.create(WaveView.prototype);
+  const log = [];
+  Object.assign(v, {
+    view: { start, fpp: 10, width: 390 }, // x=200 -> frame start+2000
+    chipRects: [], cssH: 200,
+    total: 100000,
+    minLen: 289,
+    pointers: new Map(),
+    gesture: null,
+    lastTap: null,
+    canvas: {
+      setPointerCapture() {},
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 390, height: 200 }),
+    },
+    getState: () => ({ region, flags: [], grid: noGrid, cursor: 0 }),
+    emit: (ev, p) => log.push([ev, p]),
+    draw() {},
+  });
+  // clampView and maxFpp stay real: the pan has to be clamped like the page's.
+  v.changed = () => log.push(['viewChange', v.view.start]);
+  return { v, log };
+}
+const at = (x, id = 1) => ({ pointerId: id, clientX: x, clientY: 50 });
+const regions = (log) => log.filter(([ev]) => ev === 'regionChange');
+
+test('press, hold, then drag selects from the press point', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { v, log } = pointerView();
+  v.down(at(200));                    // anchor = 7000
+  assert.deepEqual(regions(log), []); // nothing until the hold fires
+  t.mock.timers.tick(HOLD_MS);
+  // The hold announces itself with a minLen band under the finger.
+  assert.deepEqual(log.at(-1), ['regionChange', { region: { start: 7000, end: 7289 }, final: false }]);
+  v.move(at(240));
+  assert.deepEqual(log.at(-1), ['regionChange', { region: { start: 7000, end: 7400 }, final: false }]);
+  v.up(at(240));
+  assert.deepEqual(log.at(-1), ['regionChange', { region: { start: 7000, end: 7400 }, final: true }]);
+});
+
+test('a drag before the hold fires pans instead of selecting', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { v, log } = pointerView();
+  v.down(at(200));
+  v.move(at(230)); // 30px right: content follows the finger, start goes back
+  assert.equal(v.view.start, 5000 - 30 * 10);
+  assert.deepEqual(regions(log), []);
+  // The hold is dead, not merely late: ticking past it must not start a region.
+  t.mock.timers.tick(HOLD_MS);
+  assert.deepEqual(regions(log), []);
+  v.up(at(230));
+  assert.deepEqual(regions(log), []);
+});
+
+test('a second finger during a held select rolls the region back', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const prev = { start: 1000, end: 3000 };
+  const { v, log } = pointerView({ region: prev });
+  v.down(at(200));
+  t.mock.timers.tick(HOLD_MS);
+  assert.equal(log.length, 1); // the provisional band
+  v.down(at(300, 2));          // pinch takes over
+  assert.deepEqual(log.at(-1), ['regionChange', { region: prev, final: true }]);
+  assert.equal(v.gesture.kind, 'pinch');
+  // Pinching moves the viewport, never the abandoned region.
+  v.move(at(340, 2));
+  assert.deepEqual(regions(log), [
+    ['regionChange', { region: { start: 7000, end: 7289 }, final: false }],
+    ['regionChange', { region: prev, final: true }],
+  ]);
+});
+
+test('a press released before the hold still seeks', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { v, log } = pointerView();
+  v.down(at(200));
+  v.move(at(205)); // 5px: under TAP_MOVE, so still undecided
+  v.up(at(205));
+  assert.deepEqual(log, [['seek', { frame: 7050 }]]);
 });
