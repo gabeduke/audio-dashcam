@@ -6,7 +6,7 @@ import { TileCache } from './tiles.js';
 import { WaveView } from './view.js';
 import { Overview } from './overview.js';
 import { Clock } from './clock.js';
-import { fmtRegionText } from './share.js';
+import { fmtRegionText, looksLikeMP3, canShareFiles, shareOrDownload } from './share.js';
 import { barBeat, fmtTime, framesPerBeat, clampRegion } from './geometry.js';
 
 const $ = (id) => document.getElementById(id);
@@ -25,6 +25,13 @@ function fail(msg) {
   $('wave-error').hidden = false;
   $('wave-canvas').hidden = true;
   $('overview-canvas').hidden = true;
+}
+
+// Mirrors the server's render filename sanitiser (internal/audio/render.go).
+// The server names every successful render through Content-Disposition; this
+// only has to cover a response that somehow arrives without one.
+function safeStem(base) {
+  return base.replace(/[^\p{L}\p{N} \-_.]/gu, '').trim() || 'take';
 }
 
 async function main() {
@@ -329,6 +336,45 @@ async function main() {
       toast(`Export failed: ${e.message}`, 'bad');
     } finally {
       btn.disabled = !state.region;
+    }
+  });
+
+  // --- share --------------------------------------------------------------
+  // The region (or the whole take) rendered to an MP3 and handed to the phone's
+  // share sheet. Nothing is saved here: a share is a stream, not a cut.
+  const shareBtn = $('share');
+  // Decided once, up front: a browser that cannot hand a file to a share sheet
+  // says "Download" from the start rather than surprising the user on tap.
+  const shareLabel = canShareFiles() ? 'Share' : 'Download';
+  shareBtn.textContent = shareLabel;
+  shareBtn.addEventListener('click', async () => {
+    const from = state.region ? state.region.start : 0;
+    const to = state.region ? state.region.end : total;
+    shareBtn.disabled = true;
+    shareBtn.textContent = 'Rendering…';
+    try {
+      const res = await fetch(`/api/render?file=${encodeURIComponent(file)}&from=${from}&to=${to}`);
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error || `status ${res.status}`);
+      }
+      // The server names the file; this only has to survive a missing header.
+      const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+      const filename = m ? m[1] : `${safeStem(take.label || file.replace(/\.wav$/, ''))}.mp3`;
+      const blob = await res.blob();
+      // A render that died mid-stream is still a 200 -- the headers left before
+      // ffmpeg did. Sniff the body rather than trust the status.
+      const head = new Uint8Array(await blob.slice(0, 2048).arrayBuffer());
+      if (!looksLikeMP3(head) || blob.size <= 1024) throw new Error('render failed, try again');
+      const result = await shareOrDownload(blob, filename, filename.replace(/\.mp3$/, ''));
+      // Only worth saying when the button promised a share sheet and the sheet
+      // was not what happened; a plain Download button is its own message.
+      if (result === 'downloaded' && shareLabel === 'Share') toast('Shared as a download');
+    } catch (e) {
+      toast(`${shareLabel} failed: ${e.message}`, 'bad');
+    } finally {
+      shareBtn.disabled = false;
+      shareBtn.textContent = shareLabel;
     }
   });
 
