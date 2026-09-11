@@ -315,6 +315,9 @@ export class WaveView {
           // Moved before the hold fired: this press is a pan, and it stays one
           // for the rest of the gesture -- killing the timer is what decides.
           this.clearHold(g);
+          // A drag is never half of a double-tap: a pan must not leave a
+          // stray lastTap for a later tap to pair up into a flag.
+          this.lastTap = null;
           this.view.start = g.start - dx * this.view.fpp;
           this.clampView(); this.changed();
         }
@@ -372,6 +375,10 @@ export class WaveView {
       case 'select': {
         // Released before the hold could fire: nothing else will, so drop it.
         this.clearHold(g);
+        // The hold fires at 350ms, so a still press released between TAP_MS
+        // and HOLD_MS never started selecting and never moved: it is still a
+        // tap, not a dead zone, regardless of how long it was held.
+        const stillPress = !g.moved && !g.selecting;
         if (g.selecting) {
           const cur = xToFrame(p.x, this.view);
           const r = { start: Math.min(g.anchor, cur), end: Math.max(g.anchor, cur) };
@@ -388,7 +395,7 @@ export class WaveView {
             // changed its mind does not destroy the take.
             this.emit('regionChange', { region: g.prev, final: true });
           }
-        } else if (isTap) {
+        } else if (stillPress) {
           // Never held and never travelled: a tap seeks, two flag. A press
           // that panned has g.moved set and ends silently.
           this.tapOnWave(p);

@@ -222,3 +222,38 @@ test('a press released before the hold still seeks', (t) => {
   v.up(at(205));
   assert.deepEqual(log, [['seek', { frame: 7050 }]]);
 });
+
+// A pan is never half of a double-tap: it must clear lastTap, or a later tap
+// landing near the original spot within TAP_MS would wrongly pair up and add
+// a flag instead of seeking.
+test('a pan between two taps breaks the double-tap', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { v, log } = pointerView();
+  // First tap: seeks and arms lastTap.
+  v.down(at(200));
+  v.up(at(200));
+  assert.deepEqual(log.at(-1), ['seek', { frame: 7000 }]);
+  // A 30px pan on the next press: it must clear lastTap, not leave it armed.
+  v.down(at(200));
+  v.move(at(230));
+  v.up(at(230));
+  // A tap back at the original x, still within TAP_MS: without the fix this
+  // pairs with the first tap (same spot, well under DOUBLE_TAP_MOVE) and adds
+  // a stray flag instead of seeking.
+  v.down(at(200));
+  v.up(at(200));
+  assert.deepEqual(log.at(-1), ['seek', { frame: 6700 }]);
+});
+
+// The hold fires at HOLD_MS (350); a still press released between TAP_MS
+// (300) and HOLD_MS never moved and never started selecting, so it must still
+// be treated as a tap rather than falling into a dead zone.
+test('a still press held past TAP_MS but under HOLD_MS still seeks', (t) => {
+  let now = 1000;
+  t.mock.method(performance, 'now', () => now);
+  const { v, log } = pointerView();
+  v.down(at(200));  // t0 = 1000
+  now = 1000 + 320; // held 320ms: past TAP_MS, short of HOLD_MS
+  v.up(at(200));
+  assert.deepEqual(log, [['seek', { frame: 7000 }]]);
+});
