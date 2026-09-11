@@ -1,6 +1,6 @@
 # HTTP API
 
-Twelve routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
+Thirteen routes, registered in `internal/api/api.go` (`SetupRoutes`). Everything
 else the server answers is the static UI under `web/static`.
 
 There is **no authentication and no rate limiting**. `DELETE /api/delete`

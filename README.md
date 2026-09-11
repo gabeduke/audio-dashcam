@@ -10,6 +10,10 @@ It exists because the take you want is the one you already played.
 
 ![The Hindsight UI on a desktop browser: live meters, the buffer ribbon, capture buttons and a list of saved takes](docs/images/desktop.png)
 
+## Features
+
+- **Waveform page** — open any take to zoom, scrub, flag, set a region, loop it, and export the region as a new take with declick fades.
+
 ## Try it
 
 The demo runs the whole application — UI, meters, buffer ribbon, capture,
@@ -138,7 +142,7 @@ install guide covers putting the Pi on an HTTPS name with `tailscale serve`.
 |---|---|
 | [docs/install-raspberry-pi.md](docs/install-raspberry-pi.md) | Getting it running on a Pi, and operating it afterwards |
 | [docs/configuration.md](docs/configuration.md) | Every environment variable, and why the defaults are what they are |
-| [docs/api.md](docs/api.md) | The eleven HTTP endpoints |
+| [docs/api.md](docs/api.md) | The thirteen HTTP endpoints |
 | [docs/architecture.md](docs/architecture.md) | How the capture path is put together, and the traps it avoids |
 | [docs/development.md](docs/development.md) | Building, testing, deploying, and the hardware probes |
 
