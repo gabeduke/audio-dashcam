@@ -588,7 +588,7 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 					writeErr(w, http.StatusBadRequest, "flag frames must not be negative")
 					return
 				}
-				fl[i].Label = "" // not a feature yet; the field exists for a future migration only
+				fl[i].Label = sanitizeLabel(fl[i].Label)
 			}
 			// An impossible flag must not reach the sidecar either: reject the
 			// whole patch here rather than letting WriteCues bail out below and
@@ -630,11 +630,7 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 	// already saved -- but it never rolls the sidecar back.
 	cueErr := ""
 	if flagsChanged {
-		offsets := make([]uint64, 0, len(m.Flags))
-		for _, f := range m.Flags {
-			offsets = append(offsets, uint64(f.Frame))
-		}
-		if err := audio.WriteCues(wav, offsets); err != nil {
+		if err := audio.WriteCuePoints(wav, m.Flags); err != nil {
 			log.Printf("cue points for %s: %v", name, err)
 			// Generic on purpose: a WriteCues failure can be a *PathError naming
 			// the take's absolute path, and the sidecar write above already

@@ -397,7 +397,7 @@ func TestWriteCueChunkPatchesDownBeforeWritingTheChunk(t *testing.T) {
 	const dataEnd = int64(1000)
 	jf := &journalFile{size: dataEnd}
 
-	if err := writeCueChunk(jf, dataEnd, []uint64{5, 10}); err != nil {
+	if err := writeCueChunk(jf, dataEnd, []Flag{{Frame: 5}, {Frame: 10}}); err != nil {
 		t.Fatalf("writeCueChunk: %v", err)
 	}
 
@@ -456,5 +456,87 @@ func TestWriteCueChunkWithNoOffsetsNeverWritesAChunk(t *testing.T) {
 		if strings.HasPrefix(e, "write@") {
 			t.Errorf("wrote a chunk with no offsets: log = %v", jf.log)
 		}
+	}
+}
+
+func TestWriteThenReadCuePointsRoundTripsLabels(t *testing.T) {
+	p := testWAV(t, 1000)
+	want := []Flag{{Frame: 0, Label: "intro"}, {Frame: 480}, {Frame: 999, Label: "drop ✓"}}
+	if err := WriteCuePoints(p, want); err != nil {
+		t.Fatalf("WriteCuePoints: %v", err)
+	}
+	got, err := ReadCuePoints(p)
+	if err != nil {
+		t.Fatalf("ReadCuePoints: %v", err)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	// The plain reader still sees the offsets, with the label chunk ignored.
+	offs, err := ReadCues(p)
+	if err != nil {
+		t.Fatalf("ReadCues: %v", err)
+	}
+	if !slices.Equal(offs, []uint64{0, 480, 999}) {
+		t.Errorf("ReadCues = %v", offs)
+	}
+}
+
+// A label chunk is only written when at least one label is non-empty, so a
+// bare-flag file keeps the exact layout the golden test pins.
+func TestWriteCuePointsWithoutLabelsWritesNoListChunk(t *testing.T) {
+	p := testWAV(t, 1000)
+	if err := WriteCuePoints(p, []Flag{{Frame: 5}, {Frame: 7}}); err != nil {
+		t.Fatalf("WriteCuePoints: %v", err)
+	}
+	b, _ := os.ReadFile(p)
+	if bytes.Contains(b, []byte("adtl")) {
+		t.Error("found an adtl chunk on a file with no labels")
+	}
+}
+
+// Relabelling must replace, not append: a second write with shorter labels
+// leaves no tail of the first.
+func TestWriteCuePointsTwiceReplacesLabels(t *testing.T) {
+	p := testWAV(t, 1000)
+	if err := WriteCuePoints(p, []Flag{{Frame: 5, Label: "a much longer label than the next one"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCuePoints(p, []Flag{{Frame: 5, Label: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadCuePoints(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []Flag{{Frame: 5, Label: "x"}}) {
+		t.Errorf("got %+v", got)
+	}
+	b, _ := os.ReadFile(p)
+	if bytes.Count(b, []byte("labl")) != 1 || bytes.Contains(b, []byte("longer")) {
+		t.Error("old label chunk survived the rewrite")
+	}
+	// And stripping labels removes the LIST chunk entirely.
+	if err := WriteCuePoints(p, []Flag{{Frame: 5}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(p)
+	if bytes.Contains(b, []byte("adtl")) {
+		t.Error("adtl chunk survived a label-less rewrite")
+	}
+}
+
+func TestBuildLabelChunkGoldenBytes(t *testing.T) {
+	// One label "hi" on cue id 1: "labl" + size 7 (4 id + "hi\0") + pad byte.
+	got := buildLabelChunk([]Flag{{Frame: 1, Label: "hi"}})
+	want := []byte("LIST")
+	want = binary.LittleEndian.AppendUint32(want, 4+8+7+1) // adtl + labl hdr + body + pad
+	want = append(want, "adtl"...)
+	want = append(want, "labl"...)
+	want = binary.LittleEndian.AppendUint32(want, 7)
+	want = binary.LittleEndian.AppendUint32(want, 1)
+	want = append(want, 'h', 'i', 0, 0)
+	if !bytes.Equal(got, want) {
+		t.Errorf("got % x\nwant % x", got, want)
 	}
 }

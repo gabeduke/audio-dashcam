@@ -29,8 +29,8 @@ type Trim struct {
 // frame. Frames rather than seconds so the mark is sample-exact, survives as an
 // integer, and lines up with the RIFF cue points other tools read.
 //
-// Label is carried so that adding labels later needs no schema change; nothing
-// writes it today.
+// Label is the owner's name for the moment. It is mirrored into the WAV as a
+// LIST/adtl "labl" record so DAWs show it beside the marker.
 type Flag struct {
 	Frame int64  `json:"frame"`
 	Label string `json:"label,omitempty"`

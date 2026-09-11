@@ -208,7 +208,7 @@ curl -X PATCH 'http://127.0.0.1:5000/api/take?file=jam_2026-09-09_145852.wav' \
 | `starred` | bool | |
 | `trim` | `{start_frame, end_frame}` or `null` | `start_frame` must be `>= 0` **and** `end_frame` must exceed `start_frame`; `null` clears |
 | `bpm` | number or `null` | 20–400, rounded to two decimals; rejects NaN and ±Inf; `null` clears |
-| `flags` | `[{frame, label}]` or `null` | A full replacement of the take's flags. Capped at 512; `frame` must be `>= 0` and less than the take's frame count; `null` clears. `label` is stripped — the field exists for a future migration, nothing writes it yet |
+| `flags` | `[{frame, label}]` or `null` | A full replacement of the take's flags. Capped at 512; `frame` must be `>= 0` and less than the take's frame count; `null` clears. `label` is sanitized like the take label (control characters stripped, trimmed, 120 runes) |
 
 The response is the merged result:
 
@@ -217,7 +217,7 @@ The response is the merged result:
 ```
 
 If `flags` changed, the sidecar write is also mirrored into the WAV as RIFF
-`cue ` points. That second write can fail on its own — a take whose layout
+`cue ` points, with labelled flags also written as `labl` records in a `LIST`/`adtl` chunk so DAWs show the name beside the marker. That second write can fail on its own — a take whose layout
 `WriteCues` does not recognise, say — without the sidecar edit failing with
 it: the response carries a non-empty `cue_error` when it does, and the status
 stays 200, because the sidecar (the source of truth) already saved.
