@@ -175,16 +175,19 @@ export class WaveView {
   }
 
   // --- hit testing -------------------------------------------------------
-  // Priority: chips, handles, region body, downbeat, flag ticks, bare wave.
+  // Priority: chips, downbeat, handles, region body, flag ticks, bare wave.
+  // The downbeat outranks the region because the region body matches at every
+  // y: left below it, a downbeat enclosed by the region would be ungrabbable.
+  // It is gated to the top strip, so it only steals from the drawn grip tab.
   hit(x, y, st = this.getState()) {
     for (const r of this.chipRects) if (x >= r.x && x <= r.x + r.w && y <= r.h) return { kind: 'flag', flag: r.flag };
+    if (st.grid.bpm && Math.abs(x - frameToX(st.grid.downbeat, this.view)) <= HANDLE_HIT && y < DOWNBEAT_HIT_H) return { kind: 'downbeat' };
     if (st.region) {
       const x0 = frameToX(st.region.start, this.view), x1 = frameToX(st.region.end, this.view);
       if (Math.abs(x - x0) <= HANDLE_HIT) return { kind: 'handle', edge: 'start' };
       if (Math.abs(x - x1) <= HANDLE_HIT) return { kind: 'handle', edge: 'end' };
       if (x > x0 && x < x1) return { kind: 'region' };
     }
-    if (st.grid.bpm && Math.abs(x - frameToX(st.grid.downbeat, this.view)) <= HANDLE_HIT && y < DOWNBEAT_HIT_H) return { kind: 'downbeat' };
     for (const f of (st.flags || [])) if (Math.abs(x - frameToX(f.frame, this.view)) <= FLAG_HIT) return { kind: 'flag', flag: f };
     return { kind: 'wave' };
   }
