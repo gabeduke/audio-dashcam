@@ -80,12 +80,28 @@ async function main() {
     return res.json();
   }
   let regionTimer = 0;
+  let pendingTrim = null;   // the body the debounced save will send, if any
   function saveRegion() {
     clearTimeout(regionTimer);
+    pendingTrim = { trim: state.region ? { start_frame: state.region.start, end_frame: state.region.end } : null };
     regionTimer = setTimeout(() => {
-      patch({ trim: state.region ? { start_frame: state.region.start, end_frame: state.region.end } : null })
-        .catch((e) => toast(`Could not save region: ${e.message}`, 'bad'));
+      const body = pendingTrim;
+      pendingTrim = null;
+      patch(body).catch((e) => toast(`Could not save region: ${e.message}`, 'bad'));
     }, 300);
+  }
+  // A region dragged and then navigated away from within the debounce window
+  // would otherwise be lost. sendBeacon cannot PATCH, so this is a keepalive
+  // fetch: it outlives the document.
+  function flushRegion() {
+    if (!pendingTrim) return;
+    clearTimeout(regionTimer);
+    const body = pendingTrim;
+    pendingTrim = null;
+    fetch(`/api/take?file=${encodeURIComponent(file)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), keepalive: true,
+    }).catch(() => {});
   }
   function saveDownbeat() {
     patch({ downbeat_frame: state.grid.downbeat }).catch((e) => toast(`Could not save downbeat: ${e.message}`, 'bad'));
@@ -95,10 +111,22 @@ async function main() {
       if (b.cue_error) toast(b.cue_error, 'bad');
     }).catch((e) => toast(`Could not save flags: ${e.message}`, 'bad'));
   }
-  // setLoop decodes a slice over the network, so it can reject; an unhandled
-  // rejection would leave the toggle looking armed with nothing looping.
-  function applyLoop(region) {
-    Promise.resolve(clock.setLoop(region)).catch((e) => toast(`Could not loop: ${e.message}`, 'bad'));
+  // setLoop decodes a slice over the network. It can reject, and -- worse for
+  // the button -- when the slice cannot be fetched it *resolves* after
+  // quietly clearing its own loop and falling back to the preview. So the
+  // only honest answer to "is a loop armed?" is clock.loop, read after the
+  // await; the button follows that, never the request we made.
+  function syncLoopButton() {
+    loopOn = !!clock.loop;
+    $('loop').setAttribute('aria-pressed', String(loopOn));
+  }
+  async function applyLoop(region) {
+    try {
+      await clock.setLoop(region);
+    } catch (e) {
+      toast(`Could not loop: ${e.message}`, 'bad');
+    }
+    syncLoopButton();
   }
 
   // --- view events --------------------------------------------------------
@@ -165,9 +193,10 @@ async function main() {
   });
   $('loop').addEventListener('click', async () => {
     if (!state.region) { toast('Set a region first'); return; }
-    loopOn = !loopOn;
-    $('loop').setAttribute('aria-pressed', String(loopOn));
-    await clock.setLoop(loopOn ? state.region : null);
+    const next = !loopOn;
+    // aria-pressed flips only after the loop is really armed (applyLoop reads
+    // clock.loop), so a slice that failed to load leaves the button off.
+    await applyLoop(next ? state.region : null);
     if (loopOn && !clock.playing) { await clock.play(); $('play').textContent = 'Pause'; }
   });
 
@@ -178,7 +207,7 @@ async function main() {
     state.region = null;
     updateRegionRow();
     saveRegion();
-    if (loopOn) { loopOn = false; $('loop').setAttribute('aria-pressed', 'false'); applyLoop(null); }
+    if (loopOn) applyLoop(null);   // applyLoop turns the button off with the loop
     view.draw();
   }
   $('region').addEventListener('click', () => {
@@ -206,7 +235,13 @@ async function main() {
       hold = setTimeout(() => { repeated = true; rep = setInterval(step, 120); }, 500);
     });
     for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
-      b.addEventListener(ev, () => { clearTimeout(hold); clearInterval(rep); });
+      b.addEventListener(ev, () => {
+        clearTimeout(hold); clearInterval(rep);
+        // Cleared on release, not on the next click: a release that slid off
+        // the button fires no click, and a stale flag would then eat the
+        // user's next tap.
+        setTimeout(() => { repeated = false; }, 0);
+      });
     }
   }
   function updateRegionRow() {
@@ -290,7 +325,11 @@ async function main() {
   updateRegionRow();
   updateReadout();
   view.fitAll();
-  window.addEventListener('pagehide', () => { clock.destroy(); tiles.stop(); view.destroy(); });
+  // Two hooks, because neither alone covers a phone: pagehide is the one that
+  // fires on navigation, and visibilitychange is the only one that reliably
+  // fires when the app is switched away from or the screen locks.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushRegion(); });
+  window.addEventListener('pagehide', () => { flushRegion(); clock.destroy(); tiles.stop(); view.destroy(); });
 }
 
 main().catch((e) => fail(e.message || String(e)));

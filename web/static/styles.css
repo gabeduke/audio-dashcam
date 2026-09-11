@@ -29,6 +29,11 @@
 
 * { box-sizing: border-box; }
 
+/* Several rules here set display on elements that are also toggled with the
+   `hidden` property; author declarations outrank the UA's [hidden] rule, so
+   without this a hidden element stays on screen. */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -657,6 +662,9 @@ main {
   animation: rise 200ms ease;
   word-break: break-word;
 }
+/* #toasts is pointer-events: none so it never swallows taps on the page
+   behind it; a toast's own content (the export link) still needs them. */
+.toast { pointer-events: auto; }
 .toast.bad  { border-left-color: var(--danger); }
 .toast.warn { border-left-color: var(--warn); }
 @keyframes rise { from { opacity: 0; transform: translateY(10px) } }
@@ -807,16 +815,16 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
 .nudge:disabled { opacity: 0.4; }
 .icon-btn.primary { background: var(--accent-dk); color: var(--ink); border-color: var(--accent-dk); }
 .icon-btn[aria-pressed="true"] { background: var(--accent); color: #000; }
-.sheet {
+/* Scoped to the id, not to .sheet: the takes page's delete-confirm is a
+   <dialog class="sheet">, and a bare .sheet { display: flex } here would
+   outrank dialog:not([open]) and pin that dialog open. */
+#flag-sheet {
   position: fixed; left: 0; right: 0; bottom: 0;
   padding: 12px calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
   background: var(--panel-2); border-top: 1px solid var(--line);
   display: flex; gap: 8px; align-items: center; z-index: 50;
 }
-/* display:flex above outranks the UA's [hidden] rule, so the sheet would sit
-   open on every load without this. */
-.sheet[hidden] { display: none; }
-.sheet input {
+#flag-sheet input {
   flex: 1; min-height: 40px; padding: 0 10px;
   border: 1px solid var(--flag); border-radius: 9px;
   background: var(--panel); color: var(--ink); font-family: var(--font); font-size: 15px;
