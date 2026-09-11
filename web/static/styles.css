@@ -822,12 +822,23 @@ dialog.sheet::backdrop { background: rgba(3, 7, 15, .65); }
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   font-size: 14px; color: var(--ink-dim);
 }
-.region-text .mono { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* min-width:0 so the flex item may shrink below its text: without it the
+   region text pushes the row wider than a 320px phone instead of ellipsing. */
+.region-text .mono {
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+/* The disc stays 28px so the row keeps its height, but a 28px tap target is
+   well under the repo's --tap. The ::after grows the hit area to 48px without
+   growing the layout box -- pointer events on the pseudo-element are the
+   button's own, so elementFromPoint 20px outside the disc still returns it. */
 .region-x {
   appearance: none; border: 1px solid var(--line); border-radius: 50%;
   width: 28px; height: 28px; background: var(--panel); color: var(--danger);
   font-size: 16px; line-height: 1; cursor: pointer;
+  position: relative; flex: none;
 }
+.region-x::after { content: ''; position: absolute; inset: -10px; }
 .fine { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 10px; }
 .fine > summary { cursor: pointer; color: var(--ink-dim); font-size: 13px; padding: 6px 0; list-style: none; }
 .fine > summary::-webkit-details-marker { display: none; }

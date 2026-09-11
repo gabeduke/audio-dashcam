@@ -195,8 +195,14 @@ export class WaveView {
     if (st.grid.bpm && Math.abs(x - frameToX(st.grid.downbeat, this.view)) <= HANDLE_HIT && y < DOWNBEAT_HIT_H) return { kind: 'downbeat' };
     if (st.region) {
       const x0 = frameToX(st.region.start, this.view), x1 = frameToX(st.region.end, this.view);
-      if (Math.abs(x - x0) <= HANDLE_HIT) return { kind: 'handle', edge: 'start' };
-      if (Math.abs(x - x1) <= HANDLE_HIT) return { kind: 'handle', edge: 'end' };
+      // A saved region seen from far out can be a few pixels wide, and two
+      // full-size handle zones around it would swallow everything nearby:
+      // there would be nowhere left to start a fresh drag-select. Shrink the
+      // grab with the region (never below 6px) so a tiny region stays
+      // draggable by its edges without owning the screen around it.
+      const grab = x1 - x0 >= 2 * HANDLE_HIT ? HANDLE_HIT : Math.max(6, (x1 - x0) / 4);
+      if (Math.abs(x - x0) <= grab) return { kind: 'handle', edge: 'start' };
+      if (Math.abs(x - x1) <= grab) return { kind: 'handle', edge: 'end' };
       if (x > x0 && x < x1) return { kind: 'region' };
     }
     for (const f of (st.flags || [])) if (Math.abs(x - frameToX(f.frame, this.view)) <= FLAG_HIT) return { kind: 'flag', flag: f };

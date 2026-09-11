@@ -9,6 +9,9 @@ import { Clock } from './clock.js';
 import { fmtRegionText, looksLikeMP3, canShareFiles, shareOrDownload } from './share.js';
 import { barBeat, fmtTime, framesPerBeat, clampRegion } from './geometry.js';
 
+// Mirrors audio.MaxRenderSeconds: the server's cap on a share render.
+const MAX_SHARE_SECONDS = 600;
+
 const $ = (id) => document.getElementById(id);
 const file = new URLSearchParams(location.search).get('file');
 
@@ -348,6 +351,13 @@ async function main() {
   const shareLabel = canShareFiles() ? 'Share' : 'Download';
   shareBtn.textContent = shareLabel;
   shareBtn.addEventListener('click', async () => {
+    // The server caps a render at MaxRenderSeconds and would reject this after
+    // a round trip; saying so before the fetch turns a wait-then-fail into an
+    // instruction, and the button never leaves its label behind.
+    if (!state.region && total > MAX_SHARE_SECONDS * sr) {
+      toast(`Pick a region first — the whole take is over ${MAX_SHARE_SECONDS / 60} minutes`, 'bad');
+      return;
+    }
     const from = state.region ? state.region.start : 0;
     const to = state.region ? state.region.end : total;
     shareBtn.disabled = true;

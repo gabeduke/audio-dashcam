@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -689,14 +691,56 @@ func (a *API) handleRender(w http.ResponseWriter, r *http.Request) {
 	whole := from == 0 && to == info.Frames()
 	fname := audio.RenderFilename(base, from, to, info.SampleRate, whole)
 
+	// RFC 6266: filename= is the ASCII fallback for byte-oriented parsers,
+	// filename*= carries the real, possibly non-ASCII name. Sending both means
+	// a label like "caf\u00e9" survives into the share sheet on clients that
+	// read the extended form, and degrades to "caf" on those that do not.
 	w.Header().Set("Content-Type", "audio/mpeg")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, fname))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(
+		`inline; filename="%s"; filename*=UTF-8''%s`,
+		audio.RenderFilename(asciiOnly(base), from, to, info.SampleRate, whole),
+		url.PathEscape(fname),
+	))
 	w.Header().Set("Cache-Control", "no-store")
-	if err := audio.RenderMP3(r.Context(), w, a.cfg.SaveChannels, path, from, to); err != nil {
-		// Headers are already out. The client sniffs the body and reports a
-		// short or non-MP3 result as a failed render.
+	// Counting the bytes separates the two failures. ffmpeg dying mid-stream
+	// cannot be reported -- the 200 and the headers are long gone, and the
+	// client sniffs the body for a short or non-MP3 result. Failing before the
+	// first byte (no ffmpeg on PATH, a file that vanished) is still ours to
+	// report, and a 200 with an empty body would be a lie.
+	cw := &countingWriter{w: w}
+	if err := audio.RenderMP3(r.Context(), cw, a.cfg.SaveChannels, path, from, to); err != nil {
 		log.Printf("render %s [%d,%d): %v", name, from, to, err)
+		if cw.n == 0 {
+			// Nothing has been flushed, so writeErr's own Content-Type and
+			// status replace the ones set above.
+			writeErr(w, http.StatusInternalServerError, "render failed")
+		}
 	}
+}
+
+// countingWriter reports whether anything reached the client yet, which is
+// what decides if an error can still be turned into a status code.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// asciiOnly drops every non-ASCII rune, for the Content-Disposition fallback
+// name. An entirely non-ASCII label reduces to "", which RenderFilename then
+// names "take".
+func asciiOnly(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x80 {
+			return r
+		}
+		return -1
+	}, s)
 }
 
 // handleTakePatch merges fields into a take's sidecar. It is a merge, not a

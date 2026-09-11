@@ -120,12 +120,15 @@ export class Overview {
     const p = this.pt(e);
     const { x, w } = windowRect(this.getView(), this.total, this.cssW);
     const inside = p.x >= x && p.x <= x + w;
-    this.gesture = { x0: p.x, t0: performance.now(), moved: false, inside, grabOffset: p.x - x };
+    // id: a second finger landing on the strip must not steer or end the
+    // first finger's drag -- every later event is matched against the pointer
+    // that started the gesture and otherwise ignored.
+    this.gesture = { id: e.pointerId, x0: p.x, t0: performance.now(), moved: false, inside, grabOffset: p.x - x };
   }
 
   move(e) {
     const g = this.gesture;
-    if (!g) return;
+    if (!g || e.pointerId !== g.id) return;
     const p = this.pt(e);
     if (Math.abs(p.x - g.x0) > TAP_MOVE) g.moved = true;
     if (g.inside && g.moved) {
@@ -135,8 +138,8 @@ export class Overview {
 
   up(e) {
     const g = this.gesture;
+    if (!g || e.pointerId !== g.id) return;
     this.gesture = null;
-    if (!g) return;
     const p = this.pt(e);
     const isTap = !g.moved && performance.now() - g.t0 < TAP_MS;
     if (!isTap) return;

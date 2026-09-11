@@ -4,12 +4,7 @@
 // convenience for the app shell — the recordings and the live stream come from
 // the Pi itself, so there is nothing useful to serve when it is unreachable.
 
-// Bump this whenever SHELL changes: addAll is atomic, so a stale install
-// listing a file that no longer exists would fail to precache entirely.
-//
-// Renamed from 'dashcam-shell-v3' along with the product: this deliberately
-// invalidates the old cache, so a phone with the old app shell installed
-// fetches the new one rather than keep serving a UI branded with the old name.
+// Bump whenever SHELL changes, so installed phones fetch the new shell.
 const CACHE = 'hindsight-shell-v4';
 const SHELL = [
   '/',

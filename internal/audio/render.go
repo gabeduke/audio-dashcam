@@ -113,6 +113,11 @@ func RenderMP3(ctx context.Context, w io.Writer, saveChannels []int, wavPath str
 	if to-from > int64(MaxRenderSeconds*info.SampleRate) {
 		return ErrRenderTooLong
 	}
+	// nice execs ffmpeg in place rather than forking it, so the process the
+	// context kills on cancellation *is* ffmpeg and the encode really stops.
+	// A future filter chain that made ffmpeg spawn children of its own would
+	// break that: those would outlive the kill, and this would need
+	// SysProcAttr{Setpgid: true} plus a cmd.Cancel signalling the group.
 	args := append([]string{"-n", "10", "ffmpeg"}, RenderArgs(wavPath, info, saveChannels, from, to)...)
 	cmd := exec.CommandContext(ctx, "nice", args...)
 	cmd.Stdout = w

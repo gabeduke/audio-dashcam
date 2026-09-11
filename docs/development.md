@@ -81,7 +81,7 @@ touching `view.js`, `overview.js`, `share.js` or `page.js`, check by hand:
   to fit the whole take
 - **Drag-select** — one-finger drag on the main waveform draws a region
 - **Implicit loop** — playback loops the region with no Loop toggle to find;
-  clearing the region goes back to looping the whole take
+  clearing the region returns to plain playback from the cursor
 - **Fine tune** — the disclosure's Start/End nudges, the readout, downbeat
   reset, Export as take and Delete region all move the same region the drag
   drew

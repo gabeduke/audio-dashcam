@@ -1365,8 +1365,12 @@ func TestRenderStreamsAnMP3WithAName(t *testing.T) {
 	if ct := w.Header().Get("Content-Type"); ct != "audio/mpeg" {
 		t.Errorf("Content-Type = %q", ct)
 	}
-	if cd := w.Header().Get("Content-Disposition"); cd != `inline; filename="the good one 0.01-0.01.mp3"` {
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(cd, `inline; filename="the good one 0.01-0.01.mp3"`) {
 		t.Errorf("Content-Disposition = %q", cd)
+	}
+	if !strings.Contains(cd, `filename*=UTF-8''the%20good%20one%200.01-0.01.mp3`) {
+		t.Errorf("Content-Disposition lacks the RFC 6266 extended name: %q", cd)
 	}
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q", cc)
@@ -1380,7 +1384,57 @@ func TestRenderStreamsAnMP3WithAName(t *testing.T) {
 	}
 	// The whole take gets the bare name.
 	w = do(t, r, http.MethodGet, "/api/render?file=jam_r.wav&from=0&to=96000")
-	if cd := w.Header().Get("Content-Disposition"); cd != `inline; filename="the good one.mp3"` {
+	if cd := w.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, `inline; filename="the good one.mp3"`) {
 		t.Errorf("whole-take Content-Disposition = %q", cd)
+	}
+}
+
+// A non-ASCII label has to survive the trip to the share sheet: filename*
+// carries it percent-encoded, and the quoted fallback keeps only the ASCII
+// runes so a parser that ignores the extended form still gets a sane name.
+func TestRenderNamesANonASCIILabelBothWays(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not on PATH")
+	}
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_u.wav", 48000*2)
+	if err := audio.WriteMeta(filepath.Join(dir, "jam_u.wav"), audio.Meta{Version: audio.MetaVersion, Label: "café"}); err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, r, http.MethodGet, "/api/render?file=jam_u.wav&from=48000&to=72000")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	cd := w.Header().Get("Content-Disposition")
+	if !strings.HasPrefix(cd, `inline; filename="caf 0.01-0.01.mp3"`) {
+		t.Errorf("ASCII fallback name = %q", cd)
+	}
+	if !strings.Contains(cd, `filename*=UTF-8''caf%C3%A9%200.01-0.01.mp3`) {
+		t.Errorf("extended name = %q", cd)
+	}
+}
+
+// A render that dies before the first byte is still ours to report: without
+// the byte count the client gets a 200 with an empty body and has to guess.
+// Emptying PATH is the cheapest way to make the exec fail.
+func TestRenderThatFailsBeforeTheFirstByteIs500(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_f.wav", 48000*2)
+	t.Setenv("PATH", t.TempDir()) // no nice, no ffmpeg
+	w := do(t, r, http.MethodGet, "/api/render?file=jam_f.wav&from=48000&to=72000")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want the error's own", ct)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", w.Body.String(), err)
+	}
+	if body.Error != "render failed" {
+		t.Errorf("error = %q", body.Error)
 	}
 }
