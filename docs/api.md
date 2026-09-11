@@ -181,9 +181,14 @@ how a take stays in reach once newer ones have pushed it down.
   "label": "",
   "starred": false,
   "bpm": 96,
-  "flags": [{ "frame": 100 }, { "frame": 900 }]
+  "flags": [{ "frame": 100 }, { "frame": 900 }],
+  "downbeat_frame": null,
+  "source": { "name": "jam_src.wav", "start_frame": 1000, "end_frame": 9000 }
 }]
 ```
+
+`source` is present only on a take that was cut from another (see
+`POST /api/cut` below); it is absent for a take saved from the ring.
 
 Duration and layout come from each file's own header, so takes recorded under
 an older channel configuration still report correctly.
@@ -211,11 +216,12 @@ curl -X PATCH 'http://127.0.0.1:5000/api/take?file=jam_2026-09-09_145852.wav' \
 | `trim` | `{start_frame, end_frame}` or `null` | `start_frame` must be `>= 0` **and** `end_frame` must exceed `start_frame`; `null` clears |
 | `bpm` | number or `null` | 20–400, rounded to two decimals; rejects NaN and ±Inf; `null` clears |
 | `flags` | `[{frame, label}]` or `null` | A full replacement of the take's flags. Capped at 512; `frame` must be `>= 0` and less than the take's frame count; `null` clears. `label` is sanitized like the take label (control characters stripped, trimmed, 120 runes) |
+| `downbeat_frame` | integer or `null` | Where bar 1 falls, for the waveform page's grid. `>= 0` and less than the take's frame count; `null` clears |
 
 The response is the merged result:
 
 ```json
-{ "label": "warm-up", "starred": true, "trim": null, "bpm": 128, "flags": [] }
+{ "label": "warm-up", "starred": true, "trim": null, "bpm": 128, "flags": [], "downbeat_frame": null }
 ```
 
 If `flags` changed, the sidecar write is also mirrored into the WAV as RIFF

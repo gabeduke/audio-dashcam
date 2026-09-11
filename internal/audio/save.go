@@ -314,11 +314,13 @@ type Take struct {
 
 	// From the sidecar. Name above is the filename; Label is what the user
 	// called it.
-	Label   string   `json:"label"`
-	Starred bool     `json:"starred"`
-	Trim    *Trim    `json:"trim,omitempty"`
-	BPM     *float64 `json:"bpm,omitempty"`
-	Flags   []Flag   `json:"flags,omitempty"`
+	Label         string     `json:"label"`
+	Starred       bool       `json:"starred"`
+	Trim          *Trim      `json:"trim,omitempty"`
+	BPM           *float64   `json:"bpm,omitempty"`
+	Flags         []Flag     `json:"flags,omitempty"`
+	DownbeatFrame *int64     `json:"downbeat_frame,omitempty"`
+	Source        *CutSource `json:"source,omitempty"`
 }
 
 // ListTakes returns starred takes first, then the rest newest first. Duration
@@ -361,6 +363,8 @@ func ListTakes(dir string) ([]Take, error) {
 		t.Trim = m.Trim
 		t.BPM = m.BPM
 		t.Flags = m.Flags
+		t.DownbeatFrame = m.DownbeatFrame
+		t.Source = m.Source
 
 		out = append(out, t)
 	}

@@ -655,11 +655,12 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	var body struct {
-		Label   *string         `json:"label"`
-		Starred *bool           `json:"starred"`
-		Trim    json.RawMessage `json:"trim"`
-		BPM     json.RawMessage `json:"bpm"`
-		Flags   json.RawMessage `json:"flags"`
+		Label    *string         `json:"label"`
+		Starred  *bool           `json:"starred"`
+		Trim     json.RawMessage `json:"trim"`
+		BPM      json.RawMessage `json:"bpm"`
+		Flags    json.RawMessage `json:"flags"`
+		Downbeat json.RawMessage `json:"downbeat_frame"`
 	}
 	if err := dec.Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -716,6 +717,24 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 			}
 			v = math.Round(v*100) / 100
 			m.BPM = &v
+		}
+	}
+
+	// RawMessage like the others: absent, null and a value are three states.
+	if body.Downbeat != nil {
+		if string(body.Downbeat) == "null" {
+			m.DownbeatFrame = nil
+		} else {
+			var v int64
+			if err := json.Unmarshal(body.Downbeat, &v); err != nil || v < 0 {
+				writeErr(w, http.StatusBadRequest, "downbeat_frame must be a non-negative integer")
+				return
+			}
+			if info, err := audio.ReadWAVInfo(wav); err == nil && v >= info.Frames() {
+				writeErr(w, http.StatusBadRequest, "downbeat_frame is past the end of the take")
+				return
+			}
+			m.DownbeatFrame = &v
 		}
 	}
 
@@ -803,8 +822,9 @@ func (a *API) handleTakePatch(w http.ResponseWriter, r *http.Request) {
 		Trim     *audio.Trim  `json:"trim"`
 		BPM      *float64     `json:"bpm"`
 		Flags    []audio.Flag `json:"flags"`
+		Downbeat *int64       `json:"downbeat_frame"`
 		CueError string       `json:"cue_error,omitempty"`
-	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags, CueError: cueErr})
+	}{Label: m.Label, Starred: m.Starred, Trim: m.Trim, BPM: m.BPM, Flags: m.Flags, Downbeat: m.DownbeatFrame, CueError: cueErr})
 }
 
 // sanitizeLabel prepares a user-supplied label for storage. It strips control

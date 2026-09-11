@@ -144,6 +144,38 @@ func TestPatchTakeExplicitNullClearsTrim(t *testing.T) {
 	}
 }
 
+func TestPatchTakeSetsAndClearsDownbeat(t *testing.T) {
+	r, dir := newTestAPI(t)
+	writeRealTake(t, dir, "jam_d.wav", 1000)
+	wav := filepath.Join(dir, "jam_d.wav")
+
+	if w := patch(t, r, "jam_d.wav", `{"downbeat_frame":480}`); w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", w.Code, w.Body.String())
+	} else if !strings.Contains(w.Body.String(), `"downbeat_frame":480`) {
+		t.Errorf("response does not echo downbeat: %s", w.Body.String())
+	}
+	if m := audio.ReadMeta(wav); m.DownbeatFrame == nil || *m.DownbeatFrame != 480 {
+		t.Errorf("sidecar downbeat = %v", m.DownbeatFrame)
+	}
+	if w := patch(t, r, "jam_d.wav", `{"label":"x"}`); w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	if m := audio.ReadMeta(wav); m.DownbeatFrame == nil {
+		t.Error("an unrelated patch cleared the downbeat")
+	}
+	for _, bad := range []string{`{"downbeat_frame":-1}`, `{"downbeat_frame":1000}`, `{"downbeat_frame":"x"}`} {
+		if w := patch(t, r, "jam_d.wav", bad); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", bad, w.Code)
+		}
+	}
+	if w := patch(t, r, "jam_d.wav", `{"downbeat_frame":null}`); w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	if m := audio.ReadMeta(wav); m.DownbeatFrame != nil {
+		t.Error("null did not clear the downbeat")
+	}
+}
+
 func TestPatchTakeOmittedTrimIsLeftAlone(t *testing.T) {
 	r, dir := newTestAPI(t)
 	wav := writeTake(t, dir, "jam_a.wav")
@@ -1115,6 +1147,9 @@ func TestCutWritesANewTakeAndReturnsItsName(t *testing.T) {
 	lw := do(t, r, http.MethodGet, "/api/jams")
 	if !strings.Contains(lw.Body.String(), body.Name) {
 		t.Error("cut is not listed")
+	}
+	if !strings.Contains(lw.Body.String(), `"source"`) {
+		t.Error("cut lineage is not listed")
 	}
 }
 
