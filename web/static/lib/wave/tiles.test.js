@@ -14,6 +14,14 @@ function fakePeaks(from, buckets, value) {
 
 const filePeaks = fakePeaks(0, 1024, 0.1);
 
+async function until(cond, ms = 2000) {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
+
 function fakeFetch(log, { fail = () => false } = {}) {
   return async (url) => {
     log.push(url);
@@ -45,7 +53,7 @@ test('zoomed-in view requests the tiles it needs once and then draws them', asyn
   // tiles 1..4 (view [5000, 6560) -> tiles 2,3 plus margins 1 and 4)
   assert.equal(log.length, 4);
   assert.ok(log[0].includes('from=2048&to=4096&buckets=1024'));
-  await new Promise((r) => setTimeout(r, 0));
+  await until(() => changes === 4);
   assert.equal(changes, 4);
   const second = tc.columns(view, 1);
   assert.equal(log.length, 4, 'no refetch');
@@ -59,10 +67,13 @@ test('a failed tile keeps the fallback and retries with backoff', async () => {
   tc.retryBase = 1; // ms, keep the test fast
   const view = { start: 0, fpp: 1, width: 100 }; // level 0, tile 0 only (+ margin 1)
   tc.columns(view, 1);
-  await new Promise((r) => setTimeout(r, 5));
+  await until(() => log.length >= 3);
   assert.ok(log.length >= 3, `retried: ${log.length}`);
   failing = false;
-  await new Promise((r) => setTimeout(r, 20));
+  await until(() => {
+    const r = tc.columns(view, 1);
+    return Math.abs(r.cols[1] - 0.9) < 1e-6;
+  });
   const r = tc.columns(view, 1);
   assert.ok(Math.abs(r.cols[1] - 0.9) < 1e-6);
   tc.stop();
@@ -84,6 +95,6 @@ test('evicts least recently drawn tiles beyond maxTiles', async () => {
   const log = [];
   const tc = new TileCache({ file: 'a.wav', totalFrames: TOTAL, filePeaks, fetchFn: fakeFetch(log), onChange() {}, maxTiles: 3 });
   for (let i = 0; i < 6; i++) tc.columns({ start: i * 1024, fpp: 1, width: 10 }, 1);
-  await new Promise((r) => setTimeout(r, 0));
+  await until(() => tc.cache.size > 0 && tc.inflight.size === 0);
   assert.ok(tc.cache.size <= 3, `cache size ${tc.cache.size}`);
 });
