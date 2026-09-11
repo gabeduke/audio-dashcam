@@ -10,7 +10,7 @@
 // Renamed from 'dashcam-shell-v3' along with the product: this deliberately
 // invalidates the old cache, so a phone with the old app shell installed
 // fetches the new one rather than keep serving a UI branded with the old name.
-const CACHE = 'hindsight-shell-v1';
+const CACHE = 'hindsight-shell-v2';
 const SHELL = [
   '/',
   '/index.html',

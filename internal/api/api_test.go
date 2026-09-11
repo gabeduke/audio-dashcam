@@ -900,17 +900,30 @@ func TestPatchTakeRejectsANegativeFlagFrame(t *testing.T) {
 // Flag.Label exists only so a future migration needs no schema change --
 // nothing writes it today, and it must not become an unbounded free-text
 // channel into the sidecar by routing around sanitizeLabel.
-func TestPatchTakeStripsFlagLabel(t *testing.T) {
+func TestPatchTakeKeepsFlagLabelSanitized(t *testing.T) {
 	r, dir := newTestAPI(t)
 	writeRealTake(t, dir, "jam_flags.wav", 1000)
 
-	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10,"label":"not a feature yet"}]}`)
+	w := patch(t, r, "jam_flags.wav", `{"flags":[{"frame":10,"label":"  the drop\u0007 "},{"frame":20}]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", w.Code, w.Body.String())
 	}
-	m := audio.ReadMeta(filepath.Join(dir, "jam_flags.wav"))
-	if len(m.Flags) != 1 || m.Flags[0].Label != "" {
-		t.Errorf("flags = %+v, want the label stripped", m.Flags)
+	wav := filepath.Join(dir, "jam_flags.wav")
+	m := audio.ReadMeta(wav)
+	if len(m.Flags) != 2 || m.Flags[0].Label != "the drop" || m.Flags[1].Label != "" {
+		t.Errorf("flags = %+v, want the label trimmed and control chars stripped", m.Flags)
+	}
+	cues, err := audio.ReadCuePoints(wav)
+	if err != nil {
+		t.Fatalf("ReadCuePoints: %v", err)
+	}
+	if len(cues) != 2 || cues[0].Label != "the drop" || cues[1].Label != "" {
+		t.Errorf("cue points = %+v, want the label mirrored into the WAV", cues)
+	}
+	var body struct{ Flags []audio.Flag }
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Flags) != 2 || body.Flags[0].Label != "the drop" {
+		t.Errorf("response flags = %+v, want the label echoed back", body.Flags)
 	}
 }
 

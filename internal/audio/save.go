@@ -234,11 +234,7 @@ func stampFlags(wavPath string, flags []Flag) {
 		return
 	}
 
-	offsets := make([]uint64, 0, len(flags))
-	for _, f := range flags {
-		offsets = append(offsets, uint64(f.Frame))
-	}
-	if err := WriteCues(wavPath, offsets); err != nil {
+	if err := WriteCuePoints(wavPath, flags); err != nil {
 		log.Printf("[!] cue points for %s: %v", filepath.Base(wavPath), err)
 		return
 	}

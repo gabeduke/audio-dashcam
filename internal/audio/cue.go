@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -23,6 +24,22 @@ const cueChunkMaxBytes = 1 << 20 // 1 MiB
 // ReadCues returns the sample offsets of a WAV's cue points, ascending. A file
 // with no cue chunk yields an empty slice and no error.
 func ReadCues(path string) ([]uint64, error) {
+	pts, err := ReadCuePoints(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uint64, 0, len(pts))
+	for _, p := range pts {
+		out = append(out, uint64(p.Frame))
+	}
+	return out, nil
+}
+
+// ReadCuePoints returns a WAV's cue points with their labels, ascending by
+// frame. Labels come from a LIST/adtl chunk's "labl" records, matched to cue
+// points by dwIdentifier; a cue without one has an empty label. A file with
+// no cue chunk yields an empty slice and no error.
+func ReadCuePoints(path string) ([]Flag, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -37,6 +54,9 @@ func ReadCues(path string) ([]uint64, error) {
 	le := binary.LittleEndian
 	var hdr [8]byte
 	pos := int64(12)
+	var recs []cueRecord
+	labels := map[uint32]string{}
+	seenCue := false
 	for pos+8 <= end {
 		if _, err := f.Seek(pos, io.SeekStart); err != nil {
 			return nil, err
@@ -53,19 +73,82 @@ func ReadCues(path string) ([]uint64, error) {
 		// rather than read, so a corrupted or flipped chunk id can't turn
 		// into a multi-hundred-megabyte allocation. Fall through to the same
 		// skip-and-keep-walking path used for chunks we don't recognise.
-		if id == "cue " && size <= cueChunkMaxBytes {
+		switch {
+		case id == "cue " && size <= cueChunkMaxBytes && !seenCue:
 			buf := make([]byte, size)
 			if _, err := io.ReadFull(f, buf); err != nil {
 				return nil, fmt.Errorf("reading cue chunk: %w", err)
 			}
-			return parseCueChunk(buf)
+			recs, err = parseCueRecords(buf)
+			if err != nil {
+				return nil, err
+			}
+			seenCue = true
+		case id == "LIST" && size <= cueChunkMaxBytes:
+			buf := make([]byte, size)
+			if _, err := io.ReadFull(f, buf); err != nil {
+				return nil, fmt.Errorf("reading LIST chunk: %w", err)
+			}
+			parseLabelChunk(buf, labels)
 		}
 		pos += 8 + size + size%2
 	}
-	return []uint64{}, nil
+
+	out := make([]Flag, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, Flag{Frame: int64(r.offset), Label: labels[r.id]})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Frame < out[j].Frame })
+	return out, nil
+}
+
+type cueRecord struct {
+	id     uint32
+	offset uint32
+}
+
+// parseLabelChunk collects "labl" records from a LIST chunk body into labels,
+// keyed by cue id. Anything but an adtl list, and any malformed record, is
+// ignored: labels are decoration, never a reason to fail a read.
+func parseLabelChunk(buf []byte, labels map[uint32]string) {
+	if len(buf) < 4 || string(buf[0:4]) != "adtl" {
+		return
+	}
+	le := binary.LittleEndian
+	pos := 4
+	for pos+8 <= len(buf) {
+		id := string(buf[pos : pos+4])
+		size := int(le.Uint32(buf[pos+4 : pos+8]))
+		body := pos + 8
+		if size < 0 || body+size > len(buf) {
+			return
+		}
+		if id == "labl" && size >= 4 {
+			cueID := le.Uint32(buf[body : body+4])
+			text := buf[body+4 : body+size]
+			if i := bytes.IndexByte(text, 0); i >= 0 {
+				text = text[:i]
+			}
+			labels[cueID] = string(text)
+		}
+		pos = body + size + size%2
+	}
 }
 
 func parseCueChunk(buf []byte) ([]uint64, error) {
+	recs, err := parseCueRecords(buf)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uint64, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, uint64(r.offset))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
+func parseCueRecords(buf []byte) ([]cueRecord, error) {
 	if len(buf) < 4 {
 		return nil, errors.New("malformed cue chunk")
 	}
@@ -78,12 +161,13 @@ func parseCueChunk(buf []byte) ([]uint64, error) {
 	if max := (len(buf) - 4) / cueRecordBytes; int64(n) > int64(max) {
 		n = uint32(max)
 	}
-	out := make([]uint64, 0, n)
+	out := make([]cueRecord, 0, n)
 	for i := uint32(0); i < n; i++ {
 		rec := 4 + int(i)*cueRecordBytes
 		if rec+cueRecordBytes > len(buf) {
 			break
 		}
+		id := le.Uint32(buf[rec : rec+4])
 		pos := le.Uint32(buf[rec+4 : rec+8])
 		off := le.Uint32(buf[rec+20 : rec+24])
 		// Tolerate writers that fill only dwPosition. bento does this too, and
@@ -91,9 +175,8 @@ func parseCueChunk(buf []byte) ([]uint64, error) {
 		if off == 0 && pos != 0 {
 			off = pos
 		}
-		out = append(out, uint64(off))
+		out = append(out, cueRecord{id: id, offset: off})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
 }
 
@@ -120,6 +203,37 @@ func buildCueChunk(offsets []uint64) []byte {
 	return buf
 }
 
+// buildLabelChunk serialises a LIST/adtl chunk with one "labl" record per
+// labelled flag, keyed by the same 1-based dwIdentifier buildCueChunk assigns
+// to the flag at that index. Flags with an empty label get no record. Returns
+// nil when nothing is labelled, so a bare-flag file carries no LIST chunk.
+func buildLabelChunk(flags []Flag) []byte {
+	le := binary.LittleEndian
+	var body []byte
+	for i, f := range flags {
+		if f.Label == "" {
+			continue
+		}
+		text := append([]byte(f.Label), 0)
+		size := 4 + len(text)
+		body = append(body, "labl"...)
+		body = le.AppendUint32(body, uint32(size))
+		body = le.AppendUint32(body, uint32(i+1))
+		body = append(body, text...)
+		if size%2 == 1 {
+			body = append(body, 0)
+		}
+	}
+	if body == nil {
+		return nil
+	}
+	buf := make([]byte, 0, 12+len(body))
+	buf = append(buf, "LIST"...)
+	buf = le.AppendUint32(buf, uint32(4+len(body)))
+	buf = append(buf, "adtl"...)
+	return append(buf, body...)
+}
+
 // riffExtent returns the byte offset one past the end of the RIFF form.
 func riffExtent(f *os.File) (int64, error) {
 	var riff [12]byte
@@ -142,7 +256,7 @@ func riffExtent(f *os.File) (int64, error) {
 
 // cueInsertPoint returns the offset just past the data chunk -- where a cue
 // chunk belongs. It requires the layout WriteWAV produces: header, data, and at
-// most a trailing cue chunk. Anything else (a foreign file with chunks after
+// most a trailing cue chunk and its LIST/adtl label chunk. Anything else (a foreign file with chunks after
 // data, or a cue chunk before it) is refused rather than rewritten, because
 // rewriting a multi-hundred-megabyte take in place is not something this app
 // ever needs to do. There is no ingest path; every take here is one it wrote.
@@ -178,7 +292,7 @@ func cueInsertPoint(path string) (int64, error) {
 		switch id {
 		case "data":
 			dataEnd = next
-		case "cue ":
+		case "cue ", "LIST":
 			if dataEnd < 0 {
 				return 0, errors.New("cue chunk before data chunk: unsupported layout")
 			}
@@ -209,27 +323,33 @@ func cueInsertPoint(path string) (int64, error) {
 // A crash at any point leaves either a valid take with no cues or a valid take
 // with them, never a corrupt one.
 func WriteCues(path string, offsets []uint64) error {
+	flags := make([]Flag, 0, len(offsets))
+	for _, o := range offsets {
+		flags = append(flags, Flag{Frame: int64(o)})
+	}
+	return WriteCuePoints(path, flags)
+}
+
+// WriteCuePoints is WriteCues with labels: labelled flags also get a "labl"
+// record in a LIST/adtl chunk immediately after the cue chunk, which is where
+// DAWs and samplers look for marker names. Both chunks are written as one
+// region, so the crash-safety argument in writeCueChunk covers them together.
+func WriteCuePoints(path string, flags []Flag) error {
 	info, err := ReadWAVInfo(path)
 	if err != nil {
 		return err
 	}
-	frames := uint64(0)
+	frames := int64(0)
 	if bpf := int64(info.Channels * info.BitsPerSample / 8); bpf > 0 {
-		frames = uint64(info.DataBytes / bpf)
+		frames = info.DataBytes / bpf
 	}
 
-	seen := make(map[uint64]bool, len(offsets))
-	offs := make([]uint64, 0, len(offsets))
-	for _, o := range offsets {
-		if o >= frames {
-			return fmt.Errorf("cue offset %d out of range (file has %d frames)", o, frames)
-		}
-		if !seen[o] {
-			seen[o] = true
-			offs = append(offs, o)
+	for _, f := range flags {
+		if f.Frame < 0 || f.Frame >= frames {
+			return fmt.Errorf("cue offset %d out of range (file has %d frames)", f.Frame, frames)
 		}
 	}
-	sort.Slice(offs, func(i, j int) bool { return offs[i] < offs[j] })
+	flags = NormalizeFlags(flags)
 
 	dataEnd, err := cueInsertPoint(path)
 	if err != nil {
@@ -242,7 +362,7 @@ func WriteCues(path string, offsets []uint64) error {
 	}
 	defer f.Close()
 
-	return writeCueChunk(f, dataEnd, offs)
+	return writeCueChunk(f, dataEnd, flags)
 }
 
 // cueFile is the subset of *os.File that writeCueChunk needs. The seam
@@ -267,7 +387,7 @@ type cueFile interface {
 // region, then patch the RIFF size back *up* to include it. Each step is
 // fsynced before the next begins. Finally, any tail left by a longer
 // previous cue chunk is truncated away.
-func writeCueChunk(f cueFile, dataEnd int64, offs []uint64) error {
+func writeCueChunk(f cueFile, dataEnd int64, flags []Flag) error {
 	// 1. Shrink the RIFF extent so anything at or past dataEnd is ignored.
 	if err := patchRIFFSize(f, dataEnd); err != nil {
 		return err
@@ -277,8 +397,12 @@ func writeCueChunk(f cueFile, dataEnd int64, offs []uint64) error {
 	}
 
 	newEnd := dataEnd
-	if len(offs) > 0 {
-		chunk := buildCueChunk(offs)
+	if len(flags) > 0 {
+		offs := make([]uint64, 0, len(flags))
+		for _, fl := range flags {
+			offs = append(offs, uint64(fl.Frame))
+		}
+		chunk := append(buildCueChunk(offs), buildLabelChunk(flags)...)
 		// 2. Write the chunk into the now-ignored region.
 		if _, err := f.WriteAt(chunk, dataEnd); err != nil {
 			return err

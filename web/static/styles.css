@@ -541,6 +541,10 @@ main {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  /* WaveSurfer's shadow DOM has its own stacking context that otherwise sits
+     above this layer (wrapper z=2, cursor z=5) and swallows every click
+     meant for a tick. */
+  z-index: 6;
 }
 .take-flag {
   position: absolute;
@@ -555,6 +559,54 @@ main {
 .take-flag:hover {
   width: 4px;
   margin-left: -2px;
+}
+/* A flag's name sits just right of its tick; the editor replaces it while
+   open. Both are wider than the tick, so they re-enable pointer events for
+   themselves but let the tick's own hit area stay a thin line. */
+.take-flag-label,
+.take-flag-edit {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.take-flag-label {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--flag);
+  color: #000;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.take-flag-edit {
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+  cursor: default;
+}
+.take-flag-edit.flip { left: auto; right: 4px; }
+.take-flag-edit input {
+  width: 140px;
+  padding: 4px 6px;
+  border: 1px solid var(--flag);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--font); font-size: 12px;
+}
+.take-flag-rm {
+  appearance: none;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--danger);
+  font-size: 14px; line-height: 1;
+  cursor: pointer;
 }
 
 .take-actions { display: flex; align-items: center; gap: 7px; }

@@ -379,13 +379,67 @@ export class TakesList {
       const tick = document.createElement('div');
       tick.className = 'take-flag';
       tick.style.left = `${((f.frame / totalFrames) * 100).toFixed(3)}%`;
-      tick.title = 'click to remove';
+      tick.title = f.label ? `${f.label} — click to rename` : 'click to name';
+      if (f.label) {
+        const chip = document.createElement('span');
+        chip.className = 'take-flag-label';
+        chip.textContent = f.label;
+        tick.appendChild(chip);
+      }
       tick.addEventListener('click', (e) => {
         e.stopPropagation(); // otherwise the wave's own click handler reads this as a new flag
-        this.setFlags(row, (t.flags || []).filter((x) => x.frame !== f.frame));
+        this.editFlag(row, f, tick);
       });
       layer.appendChild(tick);
     }
+  }
+
+  // Opens an inline editor on a tick: a text input for the flag's label and
+  // a remove button. Enter or blur commits, Escape cancels. The editor lives
+  // inside the tick so it is positioned at the flag; only one is open at a
+  // time because any refresh redraws the whole layer.
+  editFlag(row, flag, tick) {
+    if (tick.querySelector('.take-flag-edit')) return;
+    const t = row.data;
+    const box = document.createElement('div');
+    box.className = 'take-flag-edit';
+    // Flip the editor to the left of the tick near the right edge so it
+    // stays inside the waveform.
+    if (parseFloat(tick.style.left) > 65) box.classList.add('flip');
+    box.innerHTML = `<input type="text" maxlength="120" placeholder="name this moment">
+      <button type="button" class="take-flag-rm" title="Remove flag" aria-label="Remove flag">×</button>`;
+    const input = box.querySelector('input');
+    const rm = box.querySelector('.take-flag-rm');
+    input.value = flag.label || '';
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const label = input.value.trim();
+      box.remove();
+      if (commit && label !== (flag.label || '')) {
+        this.setFlags(row, (t.flags || []).map((x) => (x.frame === flag.frame ? { frame: x.frame, label } : x)));
+      }
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => setTimeout(() => finish(true), 0));
+    // The remove button must beat the input's blur (which would commit and
+    // trigger a refresh that removes the button before it can be clicked).
+    rm.addEventListener('mousedown', (e) => e.preventDefault());
+    rm.addEventListener('click', (e) => {
+      e.stopPropagation();
+      done = true;
+      box.remove();
+      this.setFlags(row, (t.flags || []).filter((x) => x.frame !== flag.frame));
+    });
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('dblclick', (e) => e.stopPropagation());
+    tick.appendChild(box);
+    input.focus();
+    input.select();
   }
 
   async setFlags(row, flags) {
